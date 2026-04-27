@@ -1,5 +1,13 @@
 # Releases
 
+## 09 — article-extraction
+Добавлен пакет `internal/articles`: интерфейс `Extractor`, реализация на
+`go-shiori/go-readability` с HTTP-таймаутом и жёстким лимитом на размер
+тела (`MAX_ARTICLE_SIZE_KB`), нормализация URL (utm_*/fbclid/gclid/fragment,
+lower-case host, без trailing slash) и `URLHash = sha256(normalized) hex`.
+Различаем `ErrNetwork`/`ErrTooLarge`/`ErrNotArticle`/`ErrPaywall`; покрыто
+unit-тестами + golden-тестом на локальной HTML-фикстуре через httptest.
+
 ## 08 — groq-api-key
 Подключили хранение Groq API-ключа: миграция `0004_user_api_keys`,
 AES-256-GCM в `internal/crypto`, `llm.Provider` + Groq-клиент с
