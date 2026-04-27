@@ -1,0 +1,13 @@
+{
+  "summary_target": "x",
+  "summary_native": "y",
+  "category": "news",
+  "cefr_detected": "B1",
+  "adapted_versions": {
+    "lower": "",
+    "current": "c",
+    "higher": ""
+  },
+  "words": "should-be-array",
+  "safety_flags": []
+}

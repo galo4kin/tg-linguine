@@ -15,6 +15,7 @@ const defaultBaseURL = "https://api.groq.com/openai/v1"
 type Client struct {
 	baseURL string
 	http    *http.Client
+	model   string
 }
 
 type Option func(*Client)
@@ -25,6 +26,10 @@ func WithBaseURL(u string) Option {
 
 func WithHTTPClient(h *http.Client) Option {
 	return func(c *Client) { c.http = h }
+}
+
+func WithModel(m string) Option {
+	return func(c *Client) { c.model = m }
 }
 
 func New(opts ...Option) *Client {

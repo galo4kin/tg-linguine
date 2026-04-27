@@ -12,6 +12,7 @@ type Config struct {
 	EncryptionKey   string `env:"ENCRYPTION_KEY,required"`
 	HTTPTimeoutSec  int    `env:"HTTP_TIMEOUT_SEC"   envDefault:"20"`
 	MaxArticleSizeKB int   `env:"MAX_ARTICLE_SIZE_KB" envDefault:"512"`
+	GroqModel       string `env:"GROQ_MODEL"         envDefault:"llama-3.3-70b-versatile"`
 	LogLevel        string `env:"LOG_LEVEL"          envDefault:"info"`
 	LogMaxSizeMB    int    `env:"LOG_MAX_SIZE_MB"    envDefault:"10"`
 	LogMaxBackups   int    `env:"LOG_MAX_BACKUPS"    envDefault:"5"`

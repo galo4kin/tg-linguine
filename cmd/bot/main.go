@@ -59,9 +59,12 @@ func main() {
 	langs := users.NewSQLiteUserLanguageRepository(db)
 	apiKeys := users.NewSQLiteAPIKeyRepository(db, cipher)
 
-	groqClient := groq.New(groq.WithHTTPClient(&http.Client{
-		Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second,
-	}))
+	groqClient := groq.New(
+		groq.WithHTTPClient(&http.Client{
+			Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second,
+		}),
+		groq.WithModel(cfg.GroqModel),
+	)
 
 	tgBot, err := telegram.New(cfg, log, telegram.Deps{
 		Bundle:      bundle,

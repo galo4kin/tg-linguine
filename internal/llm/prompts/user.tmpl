@@ -1,0 +1,12 @@
+Target language: {{.TargetLanguage}}
+Native language: {{.NativeLanguage}}
+Learner CEFR level: {{.CEFR}}
+
+Known lemmas (exclude these from the words array): {{if .KnownWords}}{{range $i, $w := .KnownWords}}{{if $i}}, {{end}}{{$w}}{{end}}{{else}}<none>{{end}}
+
+Article title: {{.ArticleTitle}}
+
+Article text:
+{{.ArticleText}}
+
+Return the JSON object now.

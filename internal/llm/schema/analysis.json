@@ -1,0 +1,73 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "ArticleAnalysis",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "summary_target",
+    "summary_native",
+    "category",
+    "cefr_detected",
+    "adapted_versions",
+    "words",
+    "safety_flags"
+  ],
+  "properties": {
+    "summary_target": { "type": "string" },
+    "summary_native": { "type": "string" },
+    "category": { "type": "string" },
+    "cefr_detected": {
+      "type": "string",
+      "enum": ["A1", "A2", "B1", "B2", "C1", "C2"]
+    },
+    "adapted_versions": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["lower", "current", "higher"],
+      "properties": {
+        "lower":   { "type": "string" },
+        "current": { "type": "string" },
+        "higher":  { "type": "string" }
+      }
+    },
+    "words": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "surface_form",
+          "lemma",
+          "pos",
+          "transcription_ipa",
+          "translation_native",
+          "example_target",
+          "example_native"
+        ],
+        "properties": {
+          "surface_form":       { "type": "string" },
+          "lemma":              { "type": "string" },
+          "pos":                { "type": "string" },
+          "transcription_ipa":  { "type": "string" },
+          "translation_native": { "type": "string" },
+          "example_target":     { "type": "string" },
+          "example_native":     { "type": "string" }
+        }
+      }
+    },
+    "safety_flags": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "violence",
+          "sexual",
+          "self_harm",
+          "hate",
+          "drugs",
+          "political_extremism"
+        ]
+      }
+    }
+  }
+}

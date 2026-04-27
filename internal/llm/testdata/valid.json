@@ -1,0 +1,23 @@
+{
+  "summary_target": "Lorem ipsum dolor sit amet.",
+  "summary_native": "Краткое содержание статьи.",
+  "category": "fiction",
+  "cefr_detected": "B1",
+  "adapted_versions": {
+    "lower": "Easier text.",
+    "current": "Current text.",
+    "higher": "Harder text."
+  },
+  "words": [
+    {
+      "surface_form": "ipsum",
+      "lemma": "ipsum",
+      "pos": "noun",
+      "transcription_ipa": "/ˈɪpsəm/",
+      "translation_native": "сам",
+      "example_target": "Lorem ipsum.",
+      "example_native": "Лорем ипсум."
+    }
+  ],
+  "safety_flags": []
+}

@@ -1,0 +1,13 @@
+{
+  "summary_target": "x",
+  "summary_native": "y",
+  "category": "news",
+  "cefr_detected": "Z9",
+  "adapted_versions": {
+    "lower": "",
+    "current": "c",
+    "higher": ""
+  },
+  "words": [],
+  "safety_flags": []
+}

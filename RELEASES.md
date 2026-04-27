@@ -1,5 +1,14 @@
 # Releases
 
+## 10 — llm-prompt-schema
+Описан контракт «статья → структурированный JSON»: системный/пользовательский
+промпты в `internal/llm/prompts/*` (embed), JSON-Schema `analysis.json`
+(summary/category/CEFR/adapted_versions/words/safety_flags) и метод
+`groq.Client.Analyze` c `response_format: json_object`, моделью из
+`GROQ_MODEL` (дефолт `llama-3.3-70b-versatile`) и одним retry при невалидном
+ответе. Покрыто фикстурными тестами на схему (валид/missing/wrong type/bad
+enum) и httptest-тестами на retry, 401 и 429.
+
 ## 09 — article-extraction
 Добавлен пакет `internal/articles`: интерфейс `Extractor`, реализация на
 `go-shiori/go-readability` с HTTP-таймаутом и жёстким лимитом на размер
