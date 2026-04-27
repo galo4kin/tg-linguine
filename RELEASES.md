@@ -1,5 +1,13 @@
 # Releases
 
+## 08 — groq-api-key
+Подключили хранение Groq API-ключа: миграция `0004_user_api_keys`,
+AES-256-GCM в `internal/crypto`, `llm.Provider` + Groq-клиент с
+классификацией ошибок (401/429/сеть), `users.APIKeyRepository` с
+upsert через шифрование, команда `/setkey`, удаление сообщения с
+ключом из чата и заметка про мастер-ключ в README/`.env.example`.
+Логи не содержат значение ключа — только `user_id` и причину.
+
 ## 07 — onboarding
 Добавлен мини-wizard выбора языка изучения и CEFR-уровня: миграция
 `0003_user_languages`, in-memory FSM в `internal/session` с TTL 30 минут,

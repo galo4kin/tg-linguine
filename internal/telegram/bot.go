@@ -10,12 +10,16 @@ import (
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/nikita/tg-linguine/internal/config"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
+	"github.com/nikita/tg-linguine/internal/llm"
 	"github.com/nikita/tg-linguine/internal/session"
 	"github.com/nikita/tg-linguine/internal/telegram/handlers"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
-const onboardingTTL = 30 * time.Minute
+const (
+	onboardingTTL    = 30 * time.Minute
+	apiKeyPromptTTL  = 5 * time.Minute
+)
 
 type Bot struct {
 	b      *bot.Bot
@@ -23,14 +27,16 @@ type Bot struct {
 	bundle *goi18n.Bundle
 }
 
-func New(
-	cfg *config.Config,
-	log *slog.Logger,
-	bundle *goi18n.Bundle,
-	usersSvc *users.Service,
-	langs users.UserLanguageRepository,
-) (*Bot, error) {
-	tb := &Bot{log: log, bundle: bundle}
+type Deps struct {
+	Bundle      *goi18n.Bundle
+	Users       *users.Service
+	Languages   users.UserLanguageRepository
+	APIKeys     users.APIKeyRepository
+	LLMProvider llm.Provider
+}
+
+func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
+	tb := &Bot{log: log, bundle: deps.Bundle}
 
 	opts := []bot.Option{
 		bot.WithMiddlewares(tb.i18nMiddleware, tb.logMiddleware),
@@ -42,15 +48,33 @@ func New(
 	}
 
 	onbFSM := session.NewOnboarding(onboardingTTL)
-	onb := handlers.NewOnboarding(usersSvc, langs, onbFSM, bundle, log)
+	onb := handlers.NewOnboarding(deps.Users, deps.Languages, onbFSM, deps.Bundle, log)
+
+	keyWaiter := session.NewAPIKeyWaiter(apiKeyPromptTTL)
+	apiKey := handlers.NewAPIKey(deps.Users, deps.APIKeys, deps.LLMProvider, keyWaiter, deps.Bundle, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
-		handlers.Start(usersSvc, langs, onb, bundle, log))
+		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/setkey", bot.MatchTypeExact, apiKey.HandleSetKeyCommand)
+	b.RegisterHandlerMatchFunc(matchAPIKeyText(keyWaiter), apiKey.HandleIncomingText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLang, bot.MatchTypePrefix, onb.HandleLanguage)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLevel, bot.MatchTypePrefix, onb.HandleLevel)
 
 	tb.b = b
 	return tb, nil
+}
+
+func matchAPIKeyText(w *session.APIKeyWaiter) func(*models.Update) bool {
+	return func(u *models.Update) bool {
+		if u.Message == nil || u.Message.From == nil || u.Message.Text == "" {
+			return false
+		}
+		// Don't intercept other commands.
+		if len(u.Message.Text) > 0 && u.Message.Text[0] == '/' {
+			return false
+		}
+		return w.IsArmed(u.Message.From.ID)
+	}
 }
 
 func (tb *Bot) Start(ctx context.Context) {

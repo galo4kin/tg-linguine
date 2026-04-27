@@ -1,0 +1,9 @@
+CREATE TABLE user_api_keys (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  provider TEXT NOT NULL,
+  ciphertext BLOB NOT NULL,
+  nonce BLOB NOT NULL,
+  created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  UNIQUE(user_id, provider)
+);

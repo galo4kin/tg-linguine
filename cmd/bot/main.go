@@ -3,12 +3,16 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/nikita/tg-linguine/internal/config"
+	"github.com/nikita/tg-linguine/internal/crypto"
 	"github.com/nikita/tg-linguine/internal/i18n"
+	"github.com/nikita/tg-linguine/internal/llm/groq"
 	"github.com/nikita/tg-linguine/internal/logger"
 	"github.com/nikita/tg-linguine/internal/storage"
 	"github.com/nikita/tg-linguine/internal/telegram"
@@ -33,6 +37,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	cipher, err := crypto.NewFromBase64(cfg.EncryptionKey)
+	if err != nil {
+		log.Error("crypto init", "err", err)
+		os.Exit(1)
+	}
+
 	db, err := storage.Open(cfg.DBPath)
 	if err != nil {
 		log.Error("open db", "err", err)
@@ -47,8 +57,19 @@ func main() {
 
 	usersSvc := users.NewService(users.NewSQLiteRepository(db))
 	langs := users.NewSQLiteUserLanguageRepository(db)
+	apiKeys := users.NewSQLiteAPIKeyRepository(db, cipher)
 
-	tgBot, err := telegram.New(cfg, log, bundle, usersSvc, langs)
+	groqClient := groq.New(groq.WithHTTPClient(&http.Client{
+		Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second,
+	}))
+
+	tgBot, err := telegram.New(cfg, log, telegram.Deps{
+		Bundle:      bundle,
+		Users:       usersSvc,
+		Languages:   langs,
+		APIKeys:     apiKeys,
+		LLMProvider: groqClient,
+	})
 	if err != nil {
 		log.Error("telegram init", "err", err)
 		os.Exit(1)
