@@ -1,40 +1,40 @@
 # tg-linguine
 
-Telegram-бот для изучения иностранных языков. Проект на **TypeScript**, бот построен на [grammY](https://grammy.dev/).
+Telegram-бот для изучения иностранных языков. Стек: **Go**, SQLite, Groq LLM.
 
 ## Требования
 
-- Node.js 20+
+- Go 1.22+
 - Токен бота от [@BotFather](https://t.me/BotFather)
 
 ## Быстрый старт
 
 ```bash
-npm install
+make build
 cp .env.example .env
-# Укажите BOT_TOKEN в .env
-npm run dev
-```
-
-Для production-сборки:
-
-```bash
-npm run build
-npm start
+# Заполните переменные в .env
+make run
 ```
 
 ## Переменные окружения
 
-См. [.env.example](.env.example). Минимально нужен `BOT_TOKEN`.
+См. [.env.example](.env.example).
 
-## Скрипты
+| Переменная | Описание |
+|-----------|----------|
+| `BOT_TOKEN` | Токен бота (обязательно) |
+| `DB_PATH` | Путь к SQLite базе (default: `./bot.db`) |
+| `LOG_PATH` | Путь к лог-файлу (default: `./bot.log`) |
+| `ENCRYPTION_KEY` | Ключ шифрования |
+| `HTTP_TIMEOUT_SEC` | Таймаут HTTP-запросов в секундах |
+| `MAX_ARTICLE_SIZE_KB` | Максимальный размер статьи в KB |
+
+## Make-цели
 
 | Команда | Описание |
-|--------|----------|
-| `npm run dev` | Запуск с hot-reload (tsx) |
-| `npm run build` | Компиляция TypeScript в `dist/` |
-| `npm start` | Запуск скомпилированного бота |
-
-## Лицензия
-
-Проект в разработке; лицензия пока не указана.
+|---------|----------|
+| `make build` | Сборка `bin/tg-linguine` |
+| `make run` | Сборка и запуск |
+| `make test` | Запуск тестов |
+| `make lint` | `go vet` |
+| `make tidy` | `go mod tidy` |
