@@ -6,18 +6,20 @@ import (
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
+	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/nikita/tg-linguine/internal/config"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/telegram/handlers"
 )
 
 type Bot struct {
-	b   *bot.Bot
-	log *slog.Logger
+	b      *bot.Bot
+	log    *slog.Logger
+	bundle *goi18n.Bundle
 }
 
-func New(cfg *config.Config, log *slog.Logger) (*Bot, error) {
-	tb := &Bot{log: log}
+func New(cfg *config.Config, log *slog.Logger, bundle *goi18n.Bundle) (*Bot, error) {
+	tb := &Bot{log: log, bundle: bundle}
 
 	opts := []bot.Option{
 		bot.WithMiddlewares(tb.i18nMiddleware, tb.logMiddleware),
@@ -44,7 +46,7 @@ func (tb *Bot) i18nMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 		if update.Message != nil && update.Message.From != nil {
 			lang = update.Message.From.LanguageCode
 		}
-		ctx = tgi18n.WithLocalizer(ctx, tgi18n.For(lang))
+		ctx = tgi18n.WithLocalizer(ctx, tgi18n.For(tb.bundle, lang))
 		next(ctx, b, update)
 	}
 }

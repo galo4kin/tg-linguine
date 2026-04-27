@@ -8,7 +8,7 @@ import (
 
 var supportedLangs = map[string]bool{"ru": true, "en": true, "es": true}
 
-func For(lang string) *i18n.Localizer {
+func For(bundle *i18n.Bundle, lang string) *i18n.Localizer {
 	if !supportedLangs[lang] {
 		lang = "en"
 	}
@@ -16,6 +16,9 @@ func For(lang string) *i18n.Localizer {
 }
 
 func T(loc *i18n.Localizer, msgID string, data any) string {
+	if loc == nil {
+		return msgID
+	}
 	msg, err := loc.Localize(&i18n.LocalizeConfig{
 		MessageID:    msgID,
 		TemplateData: data,

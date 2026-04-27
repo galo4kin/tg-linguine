@@ -8,6 +8,7 @@ import (
 	"syscall"
 
 	"github.com/nikita/tg-linguine/internal/config"
+	"github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/logger"
 	"github.com/nikita/tg-linguine/internal/storage"
 	"github.com/nikita/tg-linguine/internal/telegram"
@@ -25,6 +26,12 @@ func main() {
 	log := logger.New(cfg)
 	log.Info("boot", "version", version)
 
+	bundle, err := i18n.NewBundle()
+	if err != nil {
+		log.Error("i18n bundle", "err", err)
+		os.Exit(1)
+	}
+
 	db, err := storage.Open(cfg.DBPath)
 	if err != nil {
 		log.Error("open db", "err", err)
@@ -37,7 +44,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	tgBot, err := telegram.New(cfg, log)
+	tgBot, err := telegram.New(cfg, log, bundle)
 	if err != nil {
 		log.Error("telegram init", "err", err)
 		os.Exit(1)

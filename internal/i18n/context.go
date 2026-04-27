@@ -13,8 +13,6 @@ func WithLocalizer(ctx context.Context, loc *i18n.Localizer) context.Context {
 }
 
 func FromContext(ctx context.Context) *i18n.Localizer {
-	if loc, ok := ctx.Value(contextKey{}).(*i18n.Localizer); ok {
-		return loc
-	}
-	return For("en")
+	loc, _ := ctx.Value(contextKey{}).(*i18n.Localizer)
+	return loc
 }

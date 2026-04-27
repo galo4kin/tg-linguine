@@ -12,15 +12,14 @@ import (
 //go:embed locales/*.yaml
 var localesFS embed.FS
 
-var bundle *i18n.Bundle
-
-func init() {
-	bundle = i18n.NewBundle(language.English)
-	bundle.RegisterUnmarshalFunc("yaml", yaml.Unmarshal)
+func NewBundle() (*i18n.Bundle, error) {
+	b := i18n.NewBundle(language.English)
+	b.RegisterUnmarshalFunc("yaml", yaml.Unmarshal)
 
 	for _, f := range []string{"en.yaml", "ru.yaml", "es.yaml"} {
-		if _, err := bundle.LoadMessageFileFS(localesFS, "locales/"+f); err != nil {
-			panic(fmt.Sprintf("i18n: load %s: %v", f, err))
+		if _, err := b.LoadMessageFileFS(localesFS, "locales/"+f); err != nil {
+			return nil, fmt.Errorf("i18n: load %s: %w", f, err)
 		}
 	}
+	return b, nil
 }
