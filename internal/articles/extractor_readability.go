@@ -52,52 +52,52 @@ func NewReadabilityExtractor(timeout time.Duration, maxBodyBytes int64, opts ...
 	return e
 }
 
-func (e *ReadabilityExtractor) Extract(ctx context.Context, rawURL string) (Article, error) {
+func (e *ReadabilityExtractor) Extract(ctx context.Context, rawURL string) (Extracted, error) {
 	normalized, err := NormalizeURL(rawURL)
 	if err != nil {
-		return Article{}, err
+		return Extracted{}, err
 	}
 	parsed, err := nurl.Parse(normalized)
 	if err != nil {
-		return Article{}, fmt.Errorf("articles: reparse: %w", err)
+		return Extracted{}, fmt.Errorf("articles: reparse: %w", err)
 	}
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, normalized, nil)
 	if err != nil {
-		return Article{}, fmt.Errorf("articles: build request: %w", err)
+		return Extracted{}, fmt.Errorf("articles: build request: %w", err)
 	}
 	req.Header.Set("User-Agent", e.userAgent)
 	req.Header.Set("Accept", "text/html,application/xhtml+xml")
 
 	resp, err := e.http.Do(req)
 	if err != nil {
-		return Article{}, fmt.Errorf("%w: %v", ErrNetwork, err)
+		return Extracted{}, fmt.Errorf("%w: %v", ErrNetwork, err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return Article{}, fmt.Errorf("%w: status %d", ErrNetwork, resp.StatusCode)
+		return Extracted{}, fmt.Errorf("%w: status %d", ErrNetwork, resp.StatusCode)
 	}
 
 	body, err := readLimited(resp.Body, e.maxBodySize)
 	if err != nil {
-		return Article{}, err
+		return Extracted{}, err
 	}
 
 	article, err := readability.FromReader(strings.NewReader(string(body)), parsed)
 	if err != nil {
-		return Article{}, fmt.Errorf("%w: readability: %v", ErrNotArticle, err)
+		return Extracted{}, fmt.Errorf("%w: readability: %v", ErrNotArticle, err)
 	}
 
 	text := strings.TrimSpace(article.TextContent)
 	if text == "" {
-		return Article{}, ErrNotArticle
+		return Extracted{}, ErrNotArticle
 	}
 	if len(text) < minArticleChars && looksLikePaywall(text) {
-		return Article{}, ErrPaywall
+		return Extracted{}, ErrPaywall
 	}
 
-	return Article{
+	return Extracted{
 		URL:           rawURL,
 		NormalizedURL: normalized,
 		URLHash:       URLHash(normalized),

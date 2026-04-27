@@ -1,5 +1,16 @@
 # Releases
 
+## 11 — articles-words-repos
+Добавлен persistence-слой результата анализа: миграция
+`0005_articles_and_words` (categories, articles, dictionary_words,
+article_words, user_word_status), доменные типы и SQLite-репозитории
+`internal/articles` (Article + UpsertCategory) и `internal/dictionary`
+(DictionaryRepository, ArticleWordsRepository, UserWordStatusRepository).
+Все вставки можно атомарно выполнить через `articles.WithTx` —
+подтверждено тестами (rollback, дедупликация лемм по language_code+lemma,
+upsert статуса слова). Прежний extracted-тип `articles.Article`
+переименован в `Extracted`, чтобы освободить имя под доменную сущность.
+
 ## 10 — llm-prompt-schema
 Описан контракт «статья → структурированный JSON»: системный/пользовательский
 промпты в `internal/llm/prompts/*` (embed), JSON-Schema `analysis.json`
