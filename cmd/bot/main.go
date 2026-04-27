@@ -1,12 +1,16 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/nikita/tg-linguine/internal/config"
 	"github.com/nikita/tg-linguine/internal/logger"
 	"github.com/nikita/tg-linguine/internal/storage"
+	"github.com/nikita/tg-linguine/internal/telegram"
 )
 
 var version = "dev"
@@ -32,4 +36,16 @@ func main() {
 		log.Error("migrations", "err", err)
 		os.Exit(1)
 	}
+
+	tgBot, err := telegram.New(cfg, log)
+	if err != nil {
+		log.Error("telegram init", "err", err)
+		os.Exit(1)
+	}
+
+	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer cancel()
+
+	tgBot.Start(ctx)
+	log.Info("shutdown")
 }
