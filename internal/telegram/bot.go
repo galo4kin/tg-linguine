@@ -7,6 +7,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	"github.com/nikita/tg-linguine/internal/config"
+	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/telegram/handlers"
 )
 
@@ -19,7 +20,7 @@ func New(cfg *config.Config, log *slog.Logger) (*Bot, error) {
 	tb := &Bot{log: log}
 
 	opts := []bot.Option{
-		bot.WithMiddlewares(tb.logMiddleware),
+		bot.WithMiddlewares(tb.i18nMiddleware, tb.logMiddleware),
 	}
 
 	b, err := bot.New(cfg.BotToken, opts...)
@@ -37,9 +38,20 @@ func (tb *Bot) Start(ctx context.Context) {
 	tb.b.Start(ctx)
 }
 
+func (tb *Bot) i18nMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		lang := "en"
+		if update.Message != nil && update.Message.From != nil {
+			lang = update.Message.From.LanguageCode
+		}
+		ctx = tgi18n.WithLocalizer(ctx, tgi18n.For(lang))
+		next(ctx, b, update)
+	}
+}
+
 func (tb *Bot) logMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		if update.Message != nil {
+		if update.Message != nil && update.Message.From != nil {
 			tb.log.Debug("update",
 				"update_id", update.ID,
 				"telegram_user_id", update.Message.From.ID,
