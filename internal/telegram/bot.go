@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"context"
+	"database/sql"
 	"log/slog"
 	"time"
 
@@ -10,6 +11,7 @@ import (
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/config"
+	"github.com/nikita/tg-linguine/internal/dictionary"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/llm"
 	"github.com/nikita/tg-linguine/internal/session"
@@ -29,12 +31,15 @@ type Bot struct {
 }
 
 type Deps struct {
-	Bundle      *goi18n.Bundle
-	Users       *users.Service
-	Languages   users.UserLanguageRepository
-	APIKeys     users.APIKeyRepository
-	LLMProvider llm.Provider
-	Articles    *articles.Service
+	Bundle       *goi18n.Bundle
+	Users        *users.Service
+	Languages    users.UserLanguageRepository
+	APIKeys      users.APIKeyRepository
+	LLMProvider  llm.Provider
+	Articles     *articles.Service
+	ArticleRepo  articles.Repository
+	ArticleWords dictionary.ArticleWordsRepository
+	DB           *sql.DB
 }
 
 func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
@@ -56,6 +61,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	apiKey := handlers.NewAPIKey(deps.Users, deps.APIKeys, deps.LLMProvider, keyWaiter, deps.Bundle, log)
 
 	urlH := handlers.NewURL(deps.Users, deps.Articles, deps.Bundle, log)
+	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
@@ -64,6 +70,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandlerMatchFunc(matchAPIKeyText(keyWaiter), apiKey.HandleIncomingText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLang, bot.MatchTypePrefix, onb.HandleLanguage)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLevel, bot.MatchTypePrefix, onb.HandleLevel)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWords, bot.MatchTypePrefix, wordsH.HandleCallback)
 
 	tb.b = b
 	return tb, nil

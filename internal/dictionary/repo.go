@@ -32,6 +32,24 @@ type ArticleWordsRepository interface {
 	// Insert writes one row of article_words. Caller is responsible for the
 	// transaction boundary.
 	Insert(ctx context.Context, q DBTX, w ArticleWord) error
+	// CountByArticle returns how many word entries are stored for an article.
+	CountByArticle(ctx context.Context, q DBTX, articleID int64) (int, error)
+	// PageByArticle returns up to `limit` word rows for the article, ordered
+	// by article_words.rowid (i.e. insertion order), starting at `offset`.
+	PageByArticle(ctx context.Context, q DBTX, articleID int64, limit, offset int) ([]ArticleWordView, error)
+}
+
+// ArticleWordView is the join of article_words ⨝ dictionary_words used for
+// rendering the words list to the user.
+type ArticleWordView struct {
+	DictionaryWordID  int64
+	SurfaceForm       string
+	Lemma             string
+	POS               string
+	TranscriptionIPA  string
+	TranslationNative string
+	ExampleTarget     string
+	ExampleNative     string
 }
 
 // UserWordStatusRepository owns the user_word_status table.
@@ -85,6 +103,50 @@ func (r *sqliteRepo) ByID(ctx context.Context, q DBTX, id int64) (*DictionaryWor
 		return nil, fmt.Errorf("dictionary: byID: %w", err)
 	}
 	return &w, nil
+}
+
+func (r *sqliteArticleWordsRepo) CountByArticle(ctx context.Context, q DBTX, articleID int64) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM article_words WHERE article_id = ?`, articleID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("dictionary: count article_words: %w", err)
+	}
+	return n, nil
+}
+
+func (r *sqliteArticleWordsRepo) PageByArticle(ctx context.Context, q DBTX, articleID int64, limit, offset int) ([]ArticleWordView, error) {
+	const stmt = `
+		SELECT aw.dictionary_word_id, aw.surface_form,
+		       dw.lemma, COALESCE(dw.pos, ''), COALESCE(dw.transcription_ipa, ''),
+		       COALESCE(aw.translation_native, ''),
+		       COALESCE(aw.example_target, ''), COALESCE(aw.example_native, '')
+		FROM article_words aw
+		JOIN dictionary_words dw ON dw.id = aw.dictionary_word_id
+		WHERE aw.article_id = ?
+		ORDER BY aw.rowid
+		LIMIT ? OFFSET ?
+	`
+	rows, err := q.QueryContext(ctx, stmt, articleID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: page article_words: %w", err)
+	}
+	defer rows.Close()
+
+	var out []ArticleWordView
+	for rows.Next() {
+		var v ArticleWordView
+		if err := rows.Scan(
+			&v.DictionaryWordID, &v.SurfaceForm,
+			&v.Lemma, &v.POS, &v.TranscriptionIPA,
+			&v.TranslationNative, &v.ExampleTarget, &v.ExampleNative,
+		); err != nil {
+			return nil, fmt.Errorf("dictionary: scan article_word view: %w", err)
+		}
+		out = append(out, v)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dictionary: iter article_words: %w", err)
+	}
+	return out, nil
 }
 
 func (r *sqliteArticleWordsRepo) Insert(ctx context.Context, q DBTX, w ArticleWord) error {

@@ -92,12 +92,15 @@ func main() {
 	})
 
 	tgBot, err := telegram.New(cfg, log, telegram.Deps{
-		Bundle:      bundle,
-		Users:       usersSvc,
-		Languages:   langs,
-		APIKeys:     apiKeys,
-		LLMProvider: groqClient,
-		Articles:    articleSvc,
+		Bundle:       bundle,
+		Users:        usersSvc,
+		Languages:    langs,
+		APIKeys:      apiKeys,
+		LLMProvider:  groqClient,
+		Articles:     articleSvc,
+		ArticleRepo:  articleRepo,
+		ArticleWords: articleWordsRepo,
+		DB:           db,
 	})
 	if err != nil {
 		log.Error("telegram init", "err", err)

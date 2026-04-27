@@ -1,5 +1,16 @@
 # Releases
 
+## 13 — pagination-words
+Завершён Walking Skeleton: из article card по кнопке «Показать все
+слова» открывается inline-просмотр по 5 слов за страницу с переводом,
+транскрипцией и парой примеров (target/native). Добавлены
+`ArticleWordsRepository.CountByArticle` + `PageByArticle` (JOIN
+`article_words` × `dictionary_words`, ORDER BY rowid) и handler
+`handlers.Words` на callback `words:<article_id>:<page>` с
+проверкой owner-а статьи, кнопками «◀ Prev / Next ▶ / Закрыть» и
+обработкой крайних страниц через `noop`-callback. i18n-строки
+добавлены в ru/en/es; `Close` удаляет сообщение.
+
 ## 12 — analyze-article-usecase
 Сквозной сценарий «URL → article card»: `articles.Service.AnalyzeArticle`
 получает активный язык/уровень и расшифрованный Groq-ключ, извлекает
