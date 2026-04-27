@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 
 	"github.com/go-telegram/bot"
@@ -11,7 +12,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
-func Start(svc *users.Service, bundle *goi18n.Bundle, log *slog.Logger) bot.HandlerFunc {
+func Start(svc *users.Service, langs users.UserLanguageRepository, onb *Onboarding, bundle *goi18n.Bundle, log *slog.Logger) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
 		if update.Message == nil || update.Message.From == nil {
 			return
@@ -33,10 +34,24 @@ func Start(svc *users.Service, bundle *goi18n.Bundle, log *slog.Logger) bot.Hand
 		}
 		log.Info("/start", "user_id", u.ID, "telegram_user_id", u.TelegramUserID, "created", created)
 
-		loc := tgi18n.For(bundle, u.InterfaceLanguage)
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: update.Message.Chat.ID,
-			Text:   tgi18n.T(loc, "start.greeting", nil),
-		})
+		active, err := langs.Active(ctx, u.ID)
+		if err != nil && !errors.Is(err, users.ErrNotFound) {
+			log.Error("active language lookup", "user_id", u.ID, "err", err)
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   tgi18n.T(tgi18n.FromContext(ctx), "error.generic", nil),
+			})
+			return
+		}
+		if active != nil {
+			loc := tgi18n.For(bundle, u.InterfaceLanguage)
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: update.Message.Chat.ID,
+				Text:   tgi18n.T(loc, "start.greeting", nil),
+			})
+			return
+		}
+
+		onb.Resume(ctx, b, update.Message.Chat.ID, u.TelegramUserID, u.InterfaceLanguage)
 	}
 }

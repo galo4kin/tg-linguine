@@ -46,8 +46,9 @@ func main() {
 	}
 
 	usersSvc := users.NewService(users.NewSQLiteRepository(db))
+	langs := users.NewSQLiteUserLanguageRepository(db)
 
-	tgBot, err := telegram.New(cfg, log, bundle, usersSvc)
+	tgBot, err := telegram.New(cfg, log, bundle, usersSvc, langs)
 	if err != nil {
 		log.Error("telegram init", "err", err)
 		os.Exit(1)

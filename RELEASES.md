@@ -1,5 +1,13 @@
 # Releases
 
+## 07 — onboarding
+Добавлен мини-wizard выбора языка изучения и CEFR-уровня: миграция
+`0003_user_languages`, in-memory FSM в `internal/session` с TTL 30 минут,
+SQLite-репо `UserLanguageRepository.Set/Active` и inline-кнопки с
+callback'ами `onb:lang:*` / `onb:level:*`. `/start` запускает wizard, если
+у пользователя ещё нет активного языка, и здоровается обычным образом, если
+язык уже выбран; незавершённый шаг можно продолжить повторным `/start`.
+
 ## 06 — user-repo
 Появился пакет `internal/users` с доменной структурой `User`, SQLite-репозиторием
 и идемпотентным use case `RegisterUser`; миграция `0002_users_extend` добавляет

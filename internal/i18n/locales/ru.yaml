@@ -1,2 +1,5 @@
 start.greeting: "Привет! Я tg-linguine — твой помощник в изучении языков."
 error.generic: "Что-то пошло не так. Попробуйте позже."
+onb.choose_language: "Выберите язык, который хотите учить:"
+onb.choose_level: "Выберите свой уровень по шкале CEFR:"
+onb.done: "Готово! Вы учите {{.Language}} на уровне {{.Level}}."
