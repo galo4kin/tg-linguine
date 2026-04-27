@@ -22,6 +22,15 @@ func (m *memRepo) ByTelegramID(ctx context.Context, tgID int64) (*User, error) {
 	return nil, ErrNotFound
 }
 
+func (m *memRepo) ByID(ctx context.Context, id int64) (*User, error) {
+	for _, u := range m.byID {
+		if u.ID == id {
+			return u, nil
+		}
+	}
+	return nil, ErrNotFound
+}
+
 func (m *memRepo) Create(ctx context.Context, u *User) error {
 	m.creates++
 	m.nextID++

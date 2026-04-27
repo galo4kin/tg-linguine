@@ -15,6 +15,30 @@ func NewSQLiteRepository(db *sql.DB) Repository {
 	return &sqliteRepo{db: db}
 }
 
+func (r *sqliteRepo) ByID(ctx context.Context, id int64) (*User, error) {
+	const q = `
+		SELECT id, telegram_user_id, telegram_username, first_name,
+		       interface_language, created_at, updated_at
+		FROM users
+		WHERE id = ?
+	`
+	var u User
+	var username, firstName sql.NullString
+	err := r.db.QueryRowContext(ctx, q, id).Scan(
+		&u.ID, &u.TelegramUserID, &username, &firstName,
+		&u.InterfaceLanguage, &u.CreatedAt, &u.UpdatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("users: ByID: %w", err)
+	}
+	u.TelegramUsername = username.String
+	u.FirstName = firstName.String
+	return &u, nil
+}
+
 func (r *sqliteRepo) ByTelegramID(ctx context.Context, tgID int64) (*User, error) {
 	const q = `
 		SELECT id, telegram_user_id, telegram_username, first_name,

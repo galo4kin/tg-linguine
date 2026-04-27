@@ -13,4 +13,5 @@ var (
 
 type Provider interface {
 	ValidateAPIKey(ctx context.Context, key string) error
+	Analyze(ctx context.Context, key string, req AnalyzeRequest) (AnalyzeResponse, error)
 }

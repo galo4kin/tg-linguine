@@ -8,6 +8,7 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
+	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/config"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/llm"
@@ -33,6 +34,7 @@ type Deps struct {
 	Languages   users.UserLanguageRepository
 	APIKeys     users.APIKeyRepository
 	LLMProvider llm.Provider
+	Articles    *articles.Service
 }
 
 func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
@@ -53,15 +55,33 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	keyWaiter := session.NewAPIKeyWaiter(apiKeyPromptTTL)
 	apiKey := handlers.NewAPIKey(deps.Users, deps.APIKeys, deps.LLMProvider, keyWaiter, deps.Bundle, log)
 
+	urlH := handlers.NewURL(deps.Users, deps.Articles, deps.Bundle, log)
+
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setkey", bot.MatchTypeExact, apiKey.HandleSetKeyCommand)
+	b.RegisterHandlerMatchFunc(matchURLText(keyWaiter), urlH.Handle)
 	b.RegisterHandlerMatchFunc(matchAPIKeyText(keyWaiter), apiKey.HandleIncomingText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLang, bot.MatchTypePrefix, onb.HandleLanguage)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLevel, bot.MatchTypePrefix, onb.HandleLevel)
 
 	tb.b = b
 	return tb, nil
+}
+
+// matchURLText fires for any text message that contains an http(s) URL,
+// unless the user is currently entering an API key (then the API-key handler
+// gets first dibs on the message).
+func matchURLText(w *session.APIKeyWaiter) func(*models.Update) bool {
+	return func(u *models.Update) bool {
+		if u.Message == nil || u.Message.From == nil {
+			return false
+		}
+		if w.IsArmed(u.Message.From.ID) {
+			return false
+		}
+		return handlers.MatchURLMessage(u)
+	}
 }
 
 func matchAPIKeyText(w *session.APIKeyWaiter) func(*models.Update) bool {

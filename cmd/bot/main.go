@@ -9,8 +9,10 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/config"
 	"github.com/nikita/tg-linguine/internal/crypto"
+	"github.com/nikita/tg-linguine/internal/dictionary"
 	"github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/llm/groq"
 	"github.com/nikita/tg-linguine/internal/logger"
@@ -66,12 +68,36 @@ func main() {
 		groq.WithModel(cfg.GroqModel),
 	)
 
+	extractor := articles.NewReadabilityExtractor(
+		time.Duration(cfg.HTTPTimeoutSec)*time.Second,
+		int64(cfg.MaxArticleSizeKB)<<10,
+	)
+	articleRepo := articles.NewSQLiteRepository(db)
+	dictRepo := dictionary.NewSQLiteRepository(db)
+	articleWordsRepo := dictionary.NewSQLiteArticleWordsRepository(db)
+	statusRepo := dictionary.NewSQLiteUserWordStatusRepository(db)
+
+	articleSvc := articles.NewService(articles.ServiceDeps{
+		DB:           db,
+		Users:        usersSvc,
+		Languages:    langs,
+		Keys:         apiKeys,
+		Extractor:    extractor,
+		LLM:          groqClient,
+		Articles:     articleRepo,
+		Dictionary:   dictRepo,
+		ArticleWords: articleWordsRepo,
+		Statuses:     statusRepo,
+		Log:          log,
+	})
+
 	tgBot, err := telegram.New(cfg, log, telegram.Deps{
 		Bundle:      bundle,
 		Users:       usersSvc,
 		Languages:   langs,
 		APIKeys:     apiKeys,
 		LLMProvider: groqClient,
+		Articles:    articleSvc,
 	})
 	if err != nil {
 		log.Error("telegram init", "err", err)

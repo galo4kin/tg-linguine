@@ -1,5 +1,18 @@
 # Releases
 
+## 12 — analyze-article-usecase
+Сквозной сценарий «URL → article card»: `articles.Service.AnalyzeArticle`
+получает активный язык/уровень и расшифрованный Groq-ключ, извлекает
+статью через `Extractor`, зовёт `llm.Provider.Analyze` и атомарно
+пишет articles + dictionary_words + article_words + user_word_status в
+одной транзакции, попутно логируя `article_chars`, `words_count`,
+`duration_ms`. В Telegram добавлен handler `handlers.URL` с regex-
+матчем на http(s)-ссылку, тремя промежуточными статусами через
+`EditMessageText` («🔎/🧠/💾») и финальной article card (заголовок,
+определённый CEFR, summary, превью 5 слов, кнопка «Показать все
+слова» с callback `words:<id>:0` для шага 13). Ошибки маппятся на
+понятные i18n-сообщения (`article.err.*` + `apikey.*`).
+
 ## 11 — articles-words-repos
 Добавлен persistence-слой результата анализа: миграция
 `0005_articles_and_words` (categories, articles, dictionary_words,

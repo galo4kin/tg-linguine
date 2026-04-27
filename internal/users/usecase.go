@@ -25,6 +25,10 @@ func NewService(repo Repository) *Service {
 	return &Service{repo: repo}
 }
 
+func (s *Service) ByID(ctx context.Context, id int64) (*User, error) {
+	return s.repo.ByID(ctx, id)
+}
+
 func (s *Service) RegisterUser(ctx context.Context, tg TelegramUser) (*User, bool, error) {
 	existing, err := s.repo.ByTelegramID(ctx, tg.ID)
 	if err == nil {
