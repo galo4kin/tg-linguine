@@ -12,6 +12,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/logger"
 	"github.com/nikita/tg-linguine/internal/storage"
 	"github.com/nikita/tg-linguine/internal/telegram"
+	"github.com/nikita/tg-linguine/internal/users"
 )
 
 var version = "dev"
@@ -44,7 +45,9 @@ func main() {
 		os.Exit(1)
 	}
 
-	tgBot, err := telegram.New(cfg, log, bundle)
+	usersSvc := users.NewService(users.NewSQLiteRepository(db))
+
+	tgBot, err := telegram.New(cfg, log, bundle, usersSvc)
 	if err != nil {
 		log.Error("telegram init", "err", err)
 		os.Exit(1)

@@ -10,6 +10,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/config"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/telegram/handlers"
+	"github.com/nikita/tg-linguine/internal/users"
 )
 
 type Bot struct {
@@ -18,7 +19,7 @@ type Bot struct {
 	bundle *goi18n.Bundle
 }
 
-func New(cfg *config.Config, log *slog.Logger, bundle *goi18n.Bundle) (*Bot, error) {
+func New(cfg *config.Config, log *slog.Logger, bundle *goi18n.Bundle, usersSvc *users.Service) (*Bot, error) {
 	tb := &Bot{log: log, bundle: bundle}
 
 	opts := []bot.Option{
@@ -30,7 +31,7 @@ func New(cfg *config.Config, log *slog.Logger, bundle *goi18n.Bundle) (*Bot, err
 		return nil, err
 	}
 
-	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, handlers.Start)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact, handlers.Start(usersSvc, bundle, log))
 
 	tb.b = b
 	return tb, nil
