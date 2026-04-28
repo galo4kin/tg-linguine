@@ -28,7 +28,7 @@ const CallbackPrefixDelete = "del:"
 type Delete struct {
 	users     *users.Service
 	onbFSM    *session.Onboarding
-	studyFSM  *session.Study
+	studyFSM  *session.Quiz
 	keyWaiter *session.APIKeyWaiter
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
@@ -37,7 +37,7 @@ type Delete struct {
 func NewDelete(
 	svc *users.Service,
 	onbFSM *session.Onboarding,
-	studyFSM *session.Study,
+	studyFSM *session.Quiz,
 	keyWaiter *session.APIKeyWaiter,
 	bundle *goi18n.Bundle,
 	log *slog.Logger,

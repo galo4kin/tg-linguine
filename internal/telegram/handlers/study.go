@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"math/rand"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -18,34 +20,41 @@ import (
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
-const studyDeckSize = 10
-
-// CallbackPrefixStudy drives the `/study` flow. Payloads:
+// CallbackPrefixStudy still drives the `/study` flow even after the
+// flashcard mode was replaced with a multiple-choice quiz — the prefix
+// string stays the same so /article cards' "show all words → study" hand-
+// off keeps working without churn. Payloads:
 //
-//	study:hit:<word_id>  — user remembered the card
-//	study:miss:<word_id> — user did not
-//	study:end            — finish session early
-//	study:close          — dismiss the summary message
+//	study:start                      — start a fresh round (also from /article cards)
+//	study:ans:<word_id>:<option_idx> — user picked option N for word
+//	study:next                       — advance from feedback to the next card
+//	study:end                        — finish the round early
+//	study:again                      — start another round from the summary
+//	study:close                      — dismiss the summary message
 const CallbackPrefixStudy = "study:"
 
-// Study runs flashcard sessions backed by the in-memory FSM
-// (internal/session.Study) and the dictionary status repo. One active
-// session per user.
+// Study runs quiz rounds (multiple choice) backed by the in-memory
+// session.Quiz FSM and the dictionary status repo. The struct keeps the
+// historical "Study" name because it is wired into bot.go and external
+// callers under /study; internally everything is quiz-shaped.
 type Study struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
 	statuses  dictionary.UserWordStatusRepository
-	fsm       *session.Study
+	fsm       *session.Quiz
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
 	db        *sql.DB
+
+	rngMu sync.Mutex
+	rng   *rand.Rand
 }
 
 func NewStudy(
 	svc *users.Service,
 	langs users.UserLanguageRepository,
 	statuses dictionary.UserWordStatusRepository,
-	fsm *session.Study,
+	fsm *session.Quiz,
 	db *sql.DB,
 	bundle *goi18n.Bundle,
 	log *slog.Logger,
@@ -58,27 +67,27 @@ func NewStudy(
 		bundle:    bundle,
 		log:       log,
 		db:        db,
+		rng:       rand.New(rand.NewSource(rand.Int63())),
 	}
 }
 
 // HandleCommand reacts to /study — assembles a fresh deck and sends the
-// first card.
+// first question.
 func (h *Study) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Update) {
 	msg := update.Message
 	if msg == nil || msg.From == nil {
 		return
 	}
-	u, ok := resolveMessageUser(ctx, h.users, msg, h.log, "study cmd")
+	u, ok := resolveMessageUser(ctx, h.users, msg, h.log, "quiz cmd")
 	if !ok {
 		return
 	}
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
-	deck, ok := h.buildDeck(ctx, u.ID, loc)
+	deck, ok := h.buildDeck(ctx, u.ID)
 	if !ok {
-		// Localized notice was already sent.
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: msg.Chat.ID,
-			Text:   tgi18n.T(loc, "study.empty", nil),
+			Text:   tgi18n.T(loc, "quiz.empty", nil),
 		})
 		return
 	}
@@ -86,8 +95,8 @@ func (h *Study) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Up
 	snap, _ := h.fsm.Snapshot(u.ID)
 	b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      msg.Chat.ID,
-		Text:        renderStudyCard(loc, snap),
-		ReplyMarkup: studyCardKeyboard(loc, snap.Current().DictionaryWordID),
+		Text:        renderQuizQuestion(loc, snap),
+		ReplyMarkup: quizQuestionKeyboard(loc, snap),
 	})
 }
 
@@ -100,7 +109,7 @@ func (h *Study) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 	defer func() {
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cq.ID})
 	}()
-	u, ok := resolveCallbackUser(ctx, h.users, cq, h.log, "study cb")
+	u, ok := resolveCallbackUser(ctx, h.users, cq, h.log, "quiz cb")
 	if !ok {
 		return
 	}
@@ -113,105 +122,116 @@ func (h *Study) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 	switch {
 	case payload == "close":
 		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
-	case payload == "start":
-		deck, ok := h.buildDeck(ctx, u.ID, loc)
-		if !ok {
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: chatID,
-				Text:   tgi18n.T(loc, "study.empty", nil),
-			})
-			return
-		}
-		h.fsm.Start(u.ID, deck)
-		snap, _ := h.fsm.Snapshot(u.ID)
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID:      chatID,
-			Text:        renderStudyCard(loc, snap),
-			ReplyMarkup: studyCardKeyboard(loc, snap.Current().DictionaryWordID),
-		})
+	case payload == "start" || payload == "again":
+		h.startRound(ctx, b, u.ID, loc, chatID, msgID, payload == "again")
 	case payload == "end":
 		h.endAndSummarize(ctx, b, u.ID, loc, chatID, msgID)
-	case strings.HasPrefix(payload, "hit:") || strings.HasPrefix(payload, "miss:"):
+	case payload == "next":
+		h.renderState(ctx, b, u.ID, loc, chatID, msgID)
+	case strings.HasPrefix(payload, "ans:"):
 		h.handleAnswer(ctx, b, u.ID, loc, chatID, msgID, payload)
 	default:
-		h.log.Warn("study cb: unknown payload", "data", cq.Data)
+		h.log.Warn("quiz cb: unknown payload", "data", cq.Data)
+	}
+}
+
+func (h *Study) startRound(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int, edit bool) {
+	deck, ok := h.buildDeck(ctx, userID)
+	if !ok {
+		text := tgi18n.T(loc, "quiz.empty", nil)
+		if edit {
+			h.editTo(ctx, b, chatID, msgID, text, nil)
+		} else {
+			b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: text})
+		}
+		return
+	}
+	h.fsm.Start(userID, deck)
+	snap, _ := h.fsm.Snapshot(userID)
+	if edit {
+		h.editTo(ctx, b, chatID, msgID, renderQuizQuestion(loc, snap), quizQuestionKeyboard(loc, snap))
+	} else {
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:      chatID,
+			Text:        renderQuizQuestion(loc, snap),
+			ReplyMarkup: quizQuestionKeyboard(loc, snap),
+		})
 	}
 }
 
 func (h *Study) handleAnswer(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int, payload string) {
-	parts := strings.SplitN(payload, ":", 2)
+	parts := strings.SplitN(strings.TrimPrefix(payload, "ans:"), ":", 2)
 	if len(parts) != 2 {
-		h.log.Warn("study cb: bad answer payload", "payload", payload)
+		h.log.Warn("quiz cb: bad answer payload", "payload", payload)
 		return
 	}
-	wordID, err := strconv.ParseInt(parts[1], 10, 64)
+	wordID, err := strconv.ParseInt(parts[0], 10, 64)
 	if err != nil {
-		h.log.Warn("study cb: bad word id", "payload", payload, "err", err)
+		h.log.Warn("quiz cb: bad word id", "payload", payload, "err", err)
+		return
+	}
+	optIdx, err := strconv.Atoi(parts[1])
+	if err != nil {
+		h.log.Warn("quiz cb: bad option idx", "payload", payload, "err", err)
 		return
 	}
 	snap, ok := h.fsm.Snapshot(userID)
 	if !ok {
-		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "study.expired", nil), studyCloseKeyboard(loc))
+		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
 		return
 	}
 	if snap.Done() || snap.Current().DictionaryWordID != wordID {
-		// Stale button (e.g. the user double-clicks an old card after a new
-		// session started). Re-render whatever the FSM currently has.
+		// Stale button (double-click after a new round started, etc.).
 		h.renderState(ctx, b, userID, loc, chatID, msgID)
 		return
 	}
+	card := snap.Current()
+	correct := optIdx == card.CorrectIndex
 
-	switch parts[0] {
-	case "hit":
-		streak, mastered, err := h.statuses.RecordCorrect(ctx, h.db, userID, wordID, session.StudyMasteryThreshold)
-		if err != nil {
-			if errors.Is(err, dictionary.ErrNotFound) {
-				h.log.Warn("study cb: missing status row", "user_id", userID, "word_id", wordID)
-			} else {
-				h.log.Error("study cb: record correct", "err", err)
-				return
-			}
-		}
-		_ = streak
-		if _, ok := h.fsm.RecordCorrect(userID, mastered); !ok {
+	var mastered bool
+	if correct {
+		_, m, err := h.statuses.RecordCorrect(ctx, h.db, userID, wordID, session.QuizMasteryThreshold)
+		if err != nil && !errors.Is(err, dictionary.ErrNotFound) {
+			h.log.Error("quiz cb: record correct", "err", err)
 			return
 		}
-	case "miss":
+		mastered = m
+	} else {
 		if err := h.statuses.RecordWrong(ctx, h.db, userID, wordID); err != nil && !errors.Is(err, dictionary.ErrNotFound) {
-			h.log.Error("study cb: record wrong", "err", err)
-			return
-		}
-		if _, ok := h.fsm.RecordWrong(userID); !ok {
+			h.log.Error("quiz cb: record wrong", "err", err)
 			return
 		}
 	}
-	h.renderState(ctx, b, userID, loc, chatID, msgID)
+	if _, ok := h.fsm.RecordAnswer(userID, correct, mastered); !ok {
+		return
+	}
+	// Show feedback for this card with a "Next" button before advancing the
+	// rendered card. The FSM cursor has already advanced; we render the
+	// feedback off `card` (the answered one) and `optIdx` (the user's choice).
+	h.editTo(ctx, b, chatID, msgID, renderQuizFeedback(loc, snap, card, optIdx, correct, mastered), quizFeedbackKeyboard(loc))
 }
 
 func (h *Study) renderState(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
 	snap, ok := h.fsm.Snapshot(userID)
 	if !ok {
-		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "study.expired", nil), studyCloseKeyboard(loc))
+		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
 		return
 	}
 	if snap.Done() {
 		final, _ := h.fsm.End(userID)
-		h.editTo(ctx, b, chatID, msgID, renderStudySummary(loc, final), studyCloseKeyboard(loc))
+		h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final), quizSummaryKeyboard(loc))
 		return
 	}
-	h.editTo(ctx, b, chatID, msgID,
-		renderStudyCard(loc, snap),
-		studyCardKeyboard(loc, snap.Current().DictionaryWordID),
-	)
+	h.editTo(ctx, b, chatID, msgID, renderQuizQuestion(loc, snap), quizQuestionKeyboard(loc, snap))
 }
 
 func (h *Study) endAndSummarize(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
 	final, ok := h.fsm.End(userID)
 	if !ok {
-		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "study.expired", nil), studyCloseKeyboard(loc))
+		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
 		return
 	}
-	h.editTo(ctx, b, chatID, msgID, renderStudySummary(loc, final), studyCloseKeyboard(loc))
+	h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final), quizSummaryKeyboard(loc))
 }
 
 func (h *Study) editTo(ctx context.Context, b *bot.Bot, chatID any, msgID int, text string, kb *models.InlineKeyboardMarkup) {
@@ -221,18 +241,18 @@ func (h *Study) editTo(ctx context.Context, b *bot.Bot, chatID any, msgID int, t
 		Text:        text,
 		ReplyMarkup: kb,
 	}); err != nil {
-		h.log.Debug("study: edit", "err", err)
+		h.log.Debug("quiz: edit", "err", err)
 	}
 }
 
-func (h *Study) buildDeck(ctx context.Context, userID int64, loc *goi18n.Localizer) ([]session.StudyCard, bool) {
+func (h *Study) buildDeck(ctx context.Context, userID int64) ([]session.QuizCard, bool) {
 	active, err := h.languages.Active(ctx, userID)
 	if err != nil || active == nil {
 		return nil, false
 	}
-	queue, err := h.statuses.LearningQueue(ctx, h.db, userID, active.LanguageCode, studyDeckSize)
+	queue, err := h.statuses.LearningQueue(ctx, h.db, userID, active.LanguageCode, session.QuizDeckSize)
 	if err != nil {
-		h.log.Error("study: learning queue", "err", err)
+		h.log.Error("quiz: learning queue", "err", err)
 		return nil, false
 	}
 	if len(queue) == 0 {
@@ -244,68 +264,162 @@ func (h *Study) buildDeck(ctx context.Context, userID int64, loc *goi18n.Localiz
 	}
 	samples, err := h.statuses.SampleArticleWords(ctx, h.db, wordIDs)
 	if err != nil {
-		h.log.Error("study: sample article_words", "err", err)
+		h.log.Error("quiz: sample article_words", "err", err)
 		return nil, false
 	}
-	deck := make([]session.StudyCard, 0, len(queue))
+	deck := make([]session.QuizCard, 0, len(queue))
 	for _, e := range queue {
-		card := session.StudyCard{
-			DictionaryWordID: e.DictionaryWordID,
-			Lemma:            e.Lemma,
-			POS:              e.POS,
-			TranscriptionIPA: e.TranscriptionIPA,
-			SurfaceForm:      e.Lemma,
-		}
+		var translation, exampleT, exampleN string
 		if s, ok := samples[e.DictionaryWordID]; ok {
-			if s.SurfaceForm != "" {
-				card.SurfaceForm = s.SurfaceForm
-			}
-			card.TranslationNative = s.TranslationNative
-			card.ExampleTarget = s.ExampleTarget
-			card.ExampleNative = s.ExampleNative
+			translation = strings.TrimSpace(s.TranslationNative)
+			exampleT = s.ExampleTarget
+			exampleN = s.ExampleNative
 		}
-		deck = append(deck, card)
+		// Without a translation we can't form either direction's question.
+		if translation == "" {
+			continue
+		}
+
+		direction := h.pickDirection()
+		// Step 50: inline-only. Step 51 introduces poll; step 52 lifts the
+		// fixed mode and lets the FSM mix both within one round.
+		ui := session.QuizUIInline
+
+		var dir dictionary.DistractorDirection
+		var correct string
+		if direction == session.QuizForeignToNative {
+			dir = dictionary.DistractorForeignToNative
+			correct = translation
+		} else {
+			dir = dictionary.DistractorNativeToForeign
+			correct = e.Lemma
+		}
+		distractors, err := h.statuses.SampleDistractors(ctx, h.db, userID, active.LanguageCode, e.DictionaryWordID, correct, dir, 3)
+		if err != nil {
+			h.log.Error("quiz: sample distractors", "err", err)
+			continue
+		}
+		if len(distractors) < 3 {
+			// Not enough variety in this user's language yet — skip rather
+			// than showing a 2-option "quiz".
+			continue
+		}
+		opts, idx := h.buildOptions(correct, distractors, 4)
+		deck = append(deck, session.QuizCard{
+			DictionaryWordID:  e.DictionaryWordID,
+			Lemma:             e.Lemma,
+			POS:               e.POS,
+			TranscriptionIPA:  e.TranscriptionIPA,
+			TranslationNative: translation,
+			ExampleTarget:     exampleT,
+			ExampleNative:     exampleN,
+			Direction:         direction,
+			UIMode:            ui,
+			Options:           opts,
+			CorrectIndex:      idx,
+		})
 	}
-	return deck, true
+	return deck, len(deck) > 0
 }
 
-func renderStudyCard(loc *goi18n.Localizer, snap session.StudySnapshot) string {
+func (h *Study) pickDirection() session.QuizDirection {
+	h.rngMu.Lock()
+	defer h.rngMu.Unlock()
+	return session.PickQuizDirection(h.rng)
+}
+
+func (h *Study) buildOptions(correct string, distractors []string, want int) ([]string, int) {
+	h.rngMu.Lock()
+	defer h.rngMu.Unlock()
+	return session.BuildQuizOptions(h.rng, correct, distractors, want)
+}
+
+func renderQuizQuestion(loc *goi18n.Localizer, snap session.QuizSnapshot) string {
 	c := snap.Current()
 	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "study.card.header", map[string]int{
+	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "quiz.card.header", map[string]int{
 		"Index": snap.Cursor + 1,
 		"Total": len(snap.Deck),
 	}))
-	sb.WriteString(c.SurfaceForm)
-	if c.POS != "" {
-		fmt.Fprintf(&sb, " (%s)", c.POS)
+	switch c.Direction {
+	case session.QuizForeignToNative:
+		sb.WriteString(c.Lemma)
+		if c.POS != "" {
+			fmt.Fprintf(&sb, " (%s)", c.POS)
+		}
+		if c.TranscriptionIPA != "" {
+			fmt.Fprintf(&sb, " /%s/", c.TranscriptionIPA)
+		}
+	case session.QuizNativeToForeign:
+		sb.WriteString(c.TranslationNative)
 	}
-	if c.TranscriptionIPA != "" {
-		fmt.Fprintf(&sb, " /%s/", c.TranscriptionIPA)
+	sb.WriteString("\n\n")
+	sb.WriteString(tgi18n.T(loc, "quiz.card.prompt", nil))
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func renderQuizFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card session.QuizCard, picked int, correct, mastered bool) string {
+	var sb strings.Builder
+	// `snap` is the pre-answer snapshot, so its cursor still points at the
+	// just-answered card; matching the question header is +1 (1-based).
+	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "quiz.card.header", map[string]int{
+		"Index": snap.Cursor + 1,
+		"Total": len(snap.Deck),
+	}))
+	switch card.Direction {
+	case session.QuizForeignToNative:
+		sb.WriteString(card.Lemma)
+		if card.POS != "" {
+			fmt.Fprintf(&sb, " (%s)", card.POS)
+		}
+		if card.TranscriptionIPA != "" {
+			fmt.Fprintf(&sb, " /%s/", card.TranscriptionIPA)
+		}
+	case session.QuizNativeToForeign:
+		sb.WriteString(card.TranslationNative)
 	}
-	sb.WriteString("\n")
-	if c.ExampleTarget != "" {
-		fmt.Fprintf(&sb, "\n%s\n", c.ExampleTarget)
+	sb.WriteString("\n\n")
+	if correct {
+		sb.WriteString(tgi18n.T(loc, "quiz.feedback.correct", nil))
+	} else {
+		sb.WriteString(tgi18n.T(loc, "quiz.feedback.wrong", map[string]any{
+			"Picked":  card.Options[picked],
+			"Correct": card.Options[card.CorrectIndex],
+		}))
 	}
-	if c.ExampleNative != "" {
-		fmt.Fprintf(&sb, "%s\n", c.ExampleNative)
+	if mastered {
+		sb.WriteString("\n")
+		sb.WriteString(tgi18n.T(loc, "quiz.feedback.mastered", map[string]any{"Lemma": card.Lemma}))
+	}
+	if card.ExampleTarget != "" || card.ExampleNative != "" {
+		sb.WriteString("\n\n")
+		sb.WriteString(tgi18n.T(loc, "quiz.feedback.example_header", nil))
+		sb.WriteString("\n")
+		if card.ExampleTarget != "" {
+			fmt.Fprintf(&sb, "%s\n", card.ExampleTarget)
+		}
+		if card.ExampleNative != "" {
+			sb.WriteString(card.ExampleNative)
+		}
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderStudySummary(loc *goi18n.Localizer, snap session.StudySnapshot) string {
+func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot) string {
 	var sb strings.Builder
-	sb.WriteString(tgi18n.T(loc, "study.summary.header", map[string]int{
+	sb.WriteString(tgi18n.T(loc, "quiz.summary.header", map[string]int{
 		"Correct": snap.Correct,
 		"Wrong":   snap.Wrong,
+		"Total":   len(snap.Deck),
 	}))
 	sb.WriteString("\n")
 	if len(snap.Mastered) == 0 {
-		sb.WriteString(tgi18n.T(loc, "study.summary.no_mastered", nil))
+		sb.WriteString("\n")
+		sb.WriteString(tgi18n.T(loc, "quiz.summary.no_mastered", nil))
 		return sb.String()
 	}
 	sb.WriteString("\n")
-	sb.WriteString(tgi18n.T(loc, "study.summary.mastered_header", map[string]int{
+	sb.WriteString(tgi18n.T(loc, "quiz.summary.mastered_header", map[string]int{
 		"Count": len(snap.Mastered),
 	}))
 	sb.WriteString("\n")
@@ -315,18 +429,36 @@ func renderStudySummary(loc *goi18n.Localizer, snap session.StudySnapshot) strin
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func studyCardKeyboard(loc *goi18n.Localizer, wordID int64) *models.InlineKeyboardMarkup {
+func quizQuestionKeyboard(loc *goi18n.Localizer, snap session.QuizSnapshot) *models.InlineKeyboardMarkup {
+	c := snap.Current()
+	rows := make([][]models.InlineKeyboardButton, 0, len(c.Options)+1)
+	for i, opt := range c.Options {
+		rows = append(rows, []models.InlineKeyboardButton{{
+			Text:         opt,
+			CallbackData: fmt.Sprintf("%sans:%d:%d", CallbackPrefixStudy, c.DictionaryWordID, i),
+		}})
+	}
+	rows = append(rows, []models.InlineKeyboardButton{{
+		Text: tgi18n.T(loc, "quiz.btn.end", nil), CallbackData: CallbackPrefixStudy + "end",
+	}})
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func quizFeedbackKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-		{
-			{Text: tgi18n.T(loc, "study.btn.hit", nil), CallbackData: fmt.Sprintf("%shit:%d", CallbackPrefixStudy, wordID)},
-			{Text: tgi18n.T(loc, "study.btn.miss", nil), CallbackData: fmt.Sprintf("%smiss:%d", CallbackPrefixStudy, wordID)},
-		},
-		{{Text: tgi18n.T(loc, "study.btn.end", nil), CallbackData: CallbackPrefixStudy + "end"}},
+		{{Text: tgi18n.T(loc, "quiz.btn.next", nil), CallbackData: CallbackPrefixStudy + "next"}},
 	}}
 }
 
-func studyCloseKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
+func quizSummaryKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-		{{Text: tgi18n.T(loc, "study.btn.close", nil), CallbackData: CallbackPrefixStudy + "close"}},
+		{{Text: tgi18n.T(loc, "quiz.btn.again", nil), CallbackData: CallbackPrefixStudy + "again"}},
+		{{Text: tgi18n.T(loc, "quiz.btn.close", nil), CallbackData: CallbackPrefixStudy + "close"}},
+	}}
+}
+
+func quizCloseKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
+	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+		{{Text: tgi18n.T(loc, "quiz.btn.close", nil), CallbackData: CallbackPrefixStudy + "close"}},
 	}}
 }

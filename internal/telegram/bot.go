@@ -81,9 +81,9 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	historyH := handlers.NewHistory(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	myWordsH := handlers.NewMyWords(deps.Users, deps.Languages, deps.WordStatuses, deps.DB, deps.Bundle, log)
-	studyFSM := session.NewStudy(studySessionTTL)
-	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, studyFSM, deps.DB, deps.Bundle, log)
-	deleteH := handlers.NewDelete(deps.Users, onbFSM, studyFSM, keyWaiter, deps.Bundle, log)
+	quizFSM := session.NewQuiz(studySessionTTL)
+	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, quizFSM, deps.DB, deps.Bundle, log)
+	deleteH := handlers.NewDelete(deps.Users, onbFSM, quizFSM, keyWaiter, deps.Bundle, log)
 	settingsH := handlers.NewSettings(deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
 	adminGate := func(uid int64) bool { return IsAdmin(cfg, uid) }
 	adminH := handlers.NewAdmin(adminGate, deps.Users, deps.ArticleRepo, deps.Dictionary, deps.DB, log)
