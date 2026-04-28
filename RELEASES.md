@@ -1,5 +1,12 @@
 # Releases
 
+## 15.6 — refactor-remove-unused-withtx
+Удалён мёртвый метод `(*sqliteRepo).WithTx(ctx, fn) error` из
+`internal/articles/repo.go` — он не входил в интерфейс `Repository`,
+не использовался и просто дублировал свободную функцию
+`articles.WithTx(ctx, db, fn)`. Семантика свободной функции не
+изменилась, `make build` и `make test` — зелёные.
+
 ## 15.5 — refactor-callback-user-resolve
 В `internal/telegram/handlers/helpers.go` появились две свободные
 функции `resolveCallbackUser` и `resolveMessageUser`, которые

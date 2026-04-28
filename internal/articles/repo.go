@@ -105,11 +105,6 @@ func (r *sqliteRepo) UpsertCategory(ctx context.Context, q DBTX, code string) (i
 	return id, nil
 }
 
-// WithTx runs fn inside a transaction. Commit on nil, rollback otherwise.
-func (r *sqliteRepo) WithTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
-	return WithTx(ctx, r.db, fn)
-}
-
 // WithTx is a free helper for callers that want to coordinate multiple repos
 // inside the same transaction.
 func WithTx(ctx context.Context, db *sql.DB, fn func(tx *sql.Tx) error) (err error) {
