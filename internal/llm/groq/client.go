@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/nikita/tg-linguine/internal/llm"
@@ -90,6 +91,21 @@ func (c *Client) ValidateAPIKey(ctx context.Context, key string) error {
 	default:
 		return fmt.Errorf("%w: status %d", llm.ErrUnavailable, resp.StatusCode)
 	}
+}
+
+// snapshotErrorBody reads the first ~500 bytes of a non-2xx response body
+// and returns it as a printable string. Used by chat / chatPlainText to put
+// Groq's actual error message into log lines and wrapped errors so 4xx
+// statuses (notably 413 Request Entity Too Large) are diagnosable from a
+// single log line. The body is consumed; callers must not read it again.
+func snapshotErrorBody(resp *http.Response) string {
+	if resp == nil || resp.Body == nil {
+		return ""
+	}
+	const max = 500
+	buf := make([]byte, max)
+	n, _ := io.ReadFull(resp.Body, buf)
+	return strings.TrimSpace(string(buf[:n]))
 }
 
 // doWithRetry executes build() and retries on transport errors or 5xx

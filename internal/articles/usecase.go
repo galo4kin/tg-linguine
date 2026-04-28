@@ -27,15 +27,18 @@ var (
 )
 
 // DefaultMaxTokensPerArticle is the fallback used when ServiceDeps.MaxTokens
-// is left at zero. 30000 fits well within the 128K context of
-// llama-3.3-70b-versatile while leaving headroom for prompts, the JSON
-// response, and three CEFR-level adapted versions.
-const DefaultMaxTokensPerArticle = 30000
+// is left at zero. 10000 is the largest input we can confidently send on
+// Groq's free tier without tripping HTTP 413 — paid-tier deployments can
+// raise MAX_TOKENS_PER_ARTICLE in env to take advantage of the model's
+// 128K context window.
+const DefaultMaxTokensPerArticle = 10000
 
 // summarizeInputBudget caps the tokens we feed into the pre-summary call
-// itself. Even a 128K-context model degrades on extremely long inputs; this
-// keeps the summarize prompt comfortably under that ceiling.
-const summarizeInputBudget = 100000
+// itself. Set to match the free-tier per-request cap so the compress call
+// does not 413 before we ever reach the analyze step. Paid-tier users who
+// raise MAX_TOKENS_PER_ARTICLE benefit from the analyze side; the compress
+// input stays bounded here regardless.
+const summarizeInputBudget = 12000
 
 // LongAnalysisMode is selected by the user when an article exceeds the
 // per-request token budget. Both modes always produce a stored article;

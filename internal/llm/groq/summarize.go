@@ -83,7 +83,15 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 	case resp.StatusCode == http.StatusTooManyRequests:
 		return "", llm.ErrRateLimited
 	default:
-		return "", fmt.Errorf("%w: status %d", llm.ErrUnavailable, resp.StatusCode)
+		body := snapshotErrorBody(resp)
+		if c.log != nil {
+			c.log.Warn("groq.summarize non-2xx",
+				"status", resp.StatusCode,
+				"body", body,
+				"errors_total", 1,
+			)
+		}
+		return "", fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, body)
 	}
 
 	var parsed chatResponse
