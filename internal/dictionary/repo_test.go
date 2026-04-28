@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/nikita/tg-linguine/internal/articles"
@@ -410,6 +411,169 @@ func TestUserWordStatus_RecordCorrect_ThresholdPromotion(t *testing.T) {
 	}
 	if got.Status != dictionary.StatusMastered {
 		t.Fatalf("final status: %s", got.Status)
+	}
+}
+
+func TestUserWordStatus_SampleDistractors_ForeignToNative(t *testing.T) {
+	db := newTestDB(t)
+	artRepo := articles.NewSQLiteRepository(db)
+	dict := dictionary.NewSQLiteRepository(db)
+	awRepo := dictionary.NewSQLiteArticleWordsRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	// Seed: user 1 has 4 English words tracked; each has a translation in
+	// article_words. We'll ask for distractors of "house" (translation "дом").
+	a := &articles.Article{
+		UserID: 1, SourceURL: "https://x", SourceURLHash: "h", Title: "t", LanguageCode: "en",
+	}
+	if err := artRepo.Insert(ctx, db, a); err != nil {
+		t.Fatalf("article: %v", err)
+	}
+	type seed struct {
+		lemma, translation string
+	}
+	rows := []seed{
+		{"house", "дом"},
+		{"run", "бежать"},
+		{"learn", "учить"},
+		{"tree", "дерево"},
+	}
+	wids := make(map[string]int64, len(rows))
+	for _, r := range rows {
+		wid, err := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: r.lemma})
+		if err != nil {
+			t.Fatalf("dict %s: %v", r.lemma, err)
+		}
+		wids[r.lemma] = wid
+		if err := awRepo.Insert(ctx, db, dictionary.ArticleWord{
+			ArticleID: a.ID, DictionaryWordID: wid, SurfaceForm: r.lemma, TranslationNative: r.translation,
+		}); err != nil {
+			t.Fatalf("aw %s: %v", r.lemma, err)
+		}
+		if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{
+			UserID: 1, DictionaryWordID: wid, Status: dictionary.StatusLearning,
+		}); err != nil {
+			t.Fatalf("status %s: %v", r.lemma, err)
+		}
+	}
+
+	got, err := statuses.SampleDistractors(ctx, db, 1, "en",
+		wids["house"], "дом", dictionary.DistractorForeignToNative, 3)
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3 distractors, got %d (%v)", len(got), got)
+	}
+	seen := map[string]bool{}
+	for _, v := range got {
+		if v == "дом" {
+			t.Fatalf("must not return correct answer: %v", got)
+		}
+		if seen[v] {
+			t.Fatalf("duplicate distractor %q in %v", v, got)
+		}
+		seen[v] = true
+	}
+	want := map[string]bool{"бежать": true, "учить": true, "дерево": true}
+	for _, v := range got {
+		if !want[v] {
+			t.Fatalf("unexpected distractor %q (want one of %v)", v, want)
+		}
+	}
+}
+
+func TestUserWordStatus_SampleDistractors_NativeToForeign_BackfillsFromGlobal(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	// User 1 only tracks one English word; the global pool has more lemmas
+	// (seeded but not attached to any user_word_status row) — backfill must
+	// kick in to satisfy n=3.
+	target, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "house"})
+	if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{
+		UserID: 1, DictionaryWordID: target, Status: dictionary.StatusLearning,
+	}); err != nil {
+		t.Fatalf("status: %v", err)
+	}
+	// Global-only words (no user_word_status row).
+	for _, lemma := range []string{"alpha", "bravo", "charlie", "delta"} {
+		if _, err := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: lemma}); err != nil {
+			t.Fatalf("dict %s: %v", lemma, err)
+		}
+	}
+	// A word in another language must not leak in.
+	if _, err := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "de", Lemma: "haus"}); err != nil {
+		t.Fatalf("de: %v", err)
+	}
+
+	got, err := statuses.SampleDistractors(ctx, db, 1, "en",
+		target, "house", dictionary.DistractorNativeToForeign, 3)
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	if len(got) != 3 {
+		t.Fatalf("want 3, got %d (%v)", len(got), got)
+	}
+	for _, v := range got {
+		if v == "house" {
+			t.Fatalf("must not return correct lemma: %v", got)
+		}
+		if v == "haus" {
+			t.Fatalf("must not leak from other language: %v", got)
+		}
+	}
+}
+
+func TestUserWordStatus_SampleDistractors_ExcludesCorrectAnswerCaseInsensitive(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	// Pool intentionally contains a casing variant of the correct answer.
+	target, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "Run"})
+	if _, err := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "run"}); err != nil {
+		t.Fatalf("dup: %v", err)
+	}
+	if _, err := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "walk"}); err != nil {
+		t.Fatalf("walk: %v", err)
+	}
+
+	got, err := statuses.SampleDistractors(ctx, db, 1, "en",
+		target, "Run", dictionary.DistractorNativeToForeign, 2)
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	for _, v := range got {
+		if strings.EqualFold(v, "run") {
+			t.Fatalf("must filter casing variants of correct answer: %v", got)
+		}
+	}
+}
+
+func TestUserWordStatus_SampleDistractors_ReturnsFewerWhenPoolTooSmall(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	// Only one other lemma exists in the language: at most 1 distractor possible.
+	target, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "house"})
+	if _, err := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "tree"}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	got, err := statuses.SampleDistractors(ctx, db, 1, "en",
+		target, "house", dictionary.DistractorNativeToForeign, 3)
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	if len(got) != 1 || got[0] != "tree" {
+		t.Fatalf("expected exactly [tree], got %v", got)
 	}
 }
 

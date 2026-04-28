@@ -95,7 +95,29 @@ type UserWordStatusRepository interface {
 	RecordCorrect(ctx context.Context, q DBTX, userID, wordID int64, threshold int) (newStreak int, mastered bool, err error)
 	// RecordWrong resets correct_streak to 0 and increments wrong_total.
 	RecordWrong(ctx context.Context, q DBTX, userID, wordID int64) error
+	// SampleDistractors returns up to `n` unique strings to use as wrong-answer
+	// options in a quiz card. Direction picks the answer space:
+	// DistractorForeignToNative draws native translations from article_words,
+	// DistractorNativeToForeign draws foreign lemmas from dictionary_words.
+	// The user's own vocabulary is preferred so options feel familiar; if it
+	// cannot fill the quota, the global pool for `languageCode` backfills.
+	// `correctAnswer` and `excludeWordID` are filtered out (case-insensitive).
+	// Returns fewer than `n` only when the database has too few candidates —
+	// the caller decides whether to proceed or skip the card.
+	SampleDistractors(ctx context.Context, q DBTX, userID int64, languageCode string, excludeWordID int64, correctAnswer string, direction DistractorDirection, n int) ([]string, error)
 }
+
+// DistractorDirection picks which column SampleDistractors draws from.
+type DistractorDirection string
+
+const (
+	// DistractorForeignToNative — quiz prompt is the foreign lemma and the
+	// answer space is native translations (article_words.translation_native).
+	DistractorForeignToNative DistractorDirection = "fwd"
+	// DistractorNativeToForeign — quiz prompt is the native translation and
+	// the answer space is foreign lemmas (dictionary_words.lemma).
+	DistractorNativeToForeign DistractorDirection = "bwd"
+)
 
 // LearningEntry is the minimal projection used to assemble a study deck.
 // Article-side fields (surface form, examples) come from
@@ -511,6 +533,133 @@ func buildUserWordsQuery(head, tail string, userID int64, languageCode string, s
 		args = append(args, limit, offset)
 	}
 	return sb.String(), args
+}
+
+func (r *sqliteStatusRepo) SampleDistractors(
+	ctx context.Context, q DBTX,
+	userID int64, languageCode string,
+	excludeWordID int64, correctAnswer string,
+	direction DistractorDirection, n int,
+) ([]string, error) {
+	if n <= 0 {
+		return nil, nil
+	}
+	correctNorm := strings.ToLower(strings.TrimSpace(correctAnswer))
+
+	// Overshoot: case-insensitive dedupe shrinks the pool, and ORDER BY RANDOM
+	// returns rows we may discard as duplicates of `correctNorm`.
+	poolLimit := n * 4
+	if poolLimit < 8 {
+		poolLimit = 8
+	}
+
+	out := make([]string, 0, n)
+	seen := make(map[string]struct{}, n)
+	add := func(values []string) {
+		for _, v := range values {
+			v = strings.TrimSpace(v)
+			if v == "" {
+				continue
+			}
+			key := strings.ToLower(v)
+			if key == correctNorm {
+				continue
+			}
+			if _, dup := seen[key]; dup {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, v)
+			if len(out) >= n {
+				return
+			}
+		}
+	}
+
+	fetch := func(query string, args ...any) ([]string, error) {
+		rows, err := q.QueryContext(ctx, query, args...)
+		if err != nil {
+			return nil, fmt.Errorf("dictionary: sample distractors: %w", err)
+		}
+		defer rows.Close()
+		var vs []string
+		for rows.Next() {
+			var s sql.NullString
+			if err := rows.Scan(&s); err != nil {
+				return nil, fmt.Errorf("dictionary: scan distractor: %w", err)
+			}
+			if s.Valid {
+				vs = append(vs, s.String)
+			}
+		}
+		if err := rows.Err(); err != nil {
+			return nil, fmt.Errorf("dictionary: iter distractors: %w", err)
+		}
+		return vs, nil
+	}
+
+	var userQuery, globalQuery string
+	switch direction {
+	case DistractorForeignToNative:
+		userQuery = `
+			SELECT DISTINCT aw.translation_native
+			FROM article_words aw
+			JOIN user_word_status uws ON uws.dictionary_word_id = aw.dictionary_word_id
+			JOIN dictionary_words dw  ON dw.id = aw.dictionary_word_id
+			WHERE uws.user_id = ?
+			  AND dw.language_code = ?
+			  AND aw.dictionary_word_id != ?
+			  AND aw.translation_native IS NOT NULL
+			  AND TRIM(aw.translation_native) != ''
+			  AND lower(TRIM(aw.translation_native)) != ?
+			ORDER BY RANDOM() LIMIT ?
+		`
+		globalQuery = `
+			SELECT DISTINCT aw.translation_native
+			FROM article_words aw
+			JOIN dictionary_words dw ON dw.id = aw.dictionary_word_id
+			WHERE dw.language_code = ?
+			  AND aw.dictionary_word_id != ?
+			  AND aw.translation_native IS NOT NULL
+			  AND TRIM(aw.translation_native) != ''
+			  AND lower(TRIM(aw.translation_native)) != ?
+			ORDER BY RANDOM() LIMIT ?
+		`
+	case DistractorNativeToForeign:
+		userQuery = `
+			SELECT dw.lemma
+			FROM user_word_status uws
+			JOIN dictionary_words dw ON dw.id = uws.dictionary_word_id
+			WHERE uws.user_id = ?
+			  AND dw.language_code = ?
+			  AND dw.id != ?
+			  AND lower(TRIM(dw.lemma)) != ?
+			ORDER BY RANDOM() LIMIT ?
+		`
+		globalQuery = `
+			SELECT lemma FROM dictionary_words
+			WHERE language_code = ?
+			  AND id != ?
+			  AND lower(TRIM(lemma)) != ?
+			ORDER BY RANDOM() LIMIT ?
+		`
+	default:
+		return nil, fmt.Errorf("dictionary: sample distractors: unknown direction %q", direction)
+	}
+
+	vs, err := fetch(userQuery, userID, languageCode, excludeWordID, correctNorm, poolLimit)
+	if err != nil {
+		return nil, err
+	}
+	add(vs)
+	if len(out) < n {
+		vs, err = fetch(globalQuery, languageCode, excludeWordID, correctNorm, poolLimit)
+		if err != nil {
+			return nil, err
+		}
+		add(vs)
+	}
+	return out, nil
 }
 
 func nullStr(s string) any {
