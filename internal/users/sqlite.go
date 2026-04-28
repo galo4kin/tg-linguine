@@ -139,6 +139,35 @@ func (r *sqliteRepo) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
+func (r *sqliteRepo) TouchLastSeen(ctx context.Context, tgID int64) error {
+	_, err := r.db.ExecContext(ctx,
+		`UPDATE users SET last_seen_at = CURRENT_TIMESTAMP WHERE telegram_user_id = ?`,
+		tgID,
+	)
+	if err != nil {
+		return fmt.Errorf("users: TouchLastSeen: %w", err)
+	}
+	return nil
+}
+
+func (r *sqliteRepo) Stats(ctx context.Context) (Stats, error) {
+	const q = `
+		SELECT
+		  COUNT(*) AS total,
+		  SUM(CASE WHEN last_seen_at >= datetime('now', '-1 day')  THEN 1 ELSE 0 END) AS active24h,
+		  SUM(CASE WHEN last_seen_at >= datetime('now', '-7 days') THEN 1 ELSE 0 END) AS active7d
+		FROM users
+	`
+	var s Stats
+	var a24, a7 sql.NullInt64
+	if err := r.db.QueryRowContext(ctx, q).Scan(&s.Total, &a24, &a7); err != nil {
+		return Stats{}, fmt.Errorf("users: Stats: %w", err)
+	}
+	s.Active24h = int(a24.Int64)
+	s.Active7d = int(a7.Int64)
+	return s, nil
+}
+
 func nullString(s string) any {
 	if s == "" {
 		return nil

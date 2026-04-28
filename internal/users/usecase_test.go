@@ -59,6 +59,11 @@ func (m *memRepo) Delete(ctx context.Context, id int64) error {
 	return ErrNotFound
 }
 
+func (m *memRepo) TouchLastSeen(ctx context.Context, tgID int64) error { return nil }
+func (m *memRepo) Stats(ctx context.Context) (Stats, error) {
+	return Stats{Total: len(m.byID)}, nil
+}
+
 func TestRegisterUser_CreatesNewUser(t *testing.T) {
 	repo := newMemRepo()
 	svc := NewService(repo)

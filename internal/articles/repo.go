@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"time"
 )
 
 var ErrNotFound = errors.New("articles: not found")
@@ -45,6 +46,11 @@ type Repository interface {
 	// an existing article — used by step 19 to merge a freshly generated
 	// per-level adaptation without touching the rest of the row.
 	UpdateAdaptedVersions(ctx context.Context, q DBTX, articleID int64, raw string) error
+	// CountAll returns total articles across all users (admin /stats).
+	CountAll(ctx context.Context, q DBTX) (int, error)
+	// CountSince returns how many articles were inserted after the given
+	// timestamp (admin /stats — pass NOW-24h for the daily window).
+	CountSince(ctx context.Context, q DBTX, since time.Time) (int, error)
 }
 
 type sqliteRepo struct {
@@ -215,6 +221,25 @@ func (r *sqliteRepo) UpdateAdaptedVersions(ctx context.Context, q DBTX, articleI
 		return fmt.Errorf("articles: update adapted: %w", err)
 	}
 	return nil
+}
+
+func (r *sqliteRepo) CountAll(ctx context.Context, q DBTX) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM articles`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("articles: count all: %w", err)
+	}
+	return n, nil
+}
+
+func (r *sqliteRepo) CountSince(ctx context.Context, q DBTX, since time.Time) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx,
+		`SELECT COUNT(*) FROM articles WHERE created_at >= ?`,
+		since.UTC().Format("2006-01-02 15:04:05"),
+	).Scan(&n); err != nil {
+		return 0, fmt.Errorf("articles: count since: %w", err)
+	}
+	return n, nil
 }
 
 func (r *sqliteRepo) UpsertCategory(ctx context.Context, q DBTX, code string) (int64, error) {

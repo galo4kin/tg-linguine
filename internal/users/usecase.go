@@ -43,6 +43,17 @@ func (s *Service) DeleteUser(ctx context.Context, id int64) error {
 	return s.repo.Delete(ctx, id)
 }
 
+// TouchLastSeen marks the user as active right now. Pure pass-through to
+// the repo, but kept on Service so handlers don't import the repo directly.
+func (s *Service) TouchLastSeen(ctx context.Context, tgID int64) error {
+	return s.repo.TouchLastSeen(ctx, tgID)
+}
+
+// Stats returns user totals for the admin /stats command.
+func (s *Service) Stats(ctx context.Context) (Stats, error) {
+	return s.repo.Stats(ctx)
+}
+
 func (s *Service) RegisterUser(ctx context.Context, tg TelegramUser) (*User, bool, error) {
 	existing, err := s.repo.ByTelegramID(ctx, tg.ID)
 	if err == nil {

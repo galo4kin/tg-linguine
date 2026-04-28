@@ -1,5 +1,17 @@
 # Releases
 
+## 32 — admin-commands
+В боте появились три служебные команды: `/stats` (всего пользователей,
+активных за 24ч/7д, статей всего и за сутки, слов в словаре), `/whoami`
+(роль + Telegram-id) и `/shutdown` (graceful exit, watchdog поднимает
+новый pid). `/stats` и `/shutdown` для не-админов молчат — наличие
+админ-режима наружу не светится. Добавлена миграция
+`0007_users_last_seen` (`last_seen_at` + индекс) и middleware
+`touchLastSeenMiddleware`, который трогает поле на каждом апдейте от
+юзера. Репозитории `users`, `articles`, `dictionary` обзавелись
+агрегатными счётчиками; i18n-ключи `admin.*` синхронно появились в
+en/ru/es. Покрыто тестом `users.Stats` (бэкдейтинг + Touch).
+
 ## 31 — admin-role
 Введён фундамент для админ-функций: `ADMIN_USER_ID` в
 `internal/config/config.go` (опциональный, default `0` = админ

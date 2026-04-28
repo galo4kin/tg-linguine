@@ -31,6 +31,7 @@ type Bot struct {
 	b      *bot.Bot
 	log    *slog.Logger
 	bundle *goi18n.Bundle
+	users  *users.Service
 	// inflight tracks handlers currently running so Shutdown can drain them
 	// gracefully on SIGTERM. The recover/wait middleware Add()s before
 	// dispatch and Done()s in defer.
@@ -47,17 +48,19 @@ type Deps struct {
 	ArticleRepo  articles.Repository
 	ArticleWords dictionary.ArticleWordsRepository
 	WordStatuses dictionary.UserWordStatusRepository
+	Dictionary   dictionary.Repository
 	DB           *sql.DB
 }
 
 func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
-	tb := &Bot{log: log, bundle: deps.Bundle}
+	tb := &Bot{log: log, bundle: deps.Bundle, users: deps.Users}
 
 	opts := []bot.Option{
 		// Order matters: track-inflight first so Shutdown sees the work; then
 		// recover so panics are caught before they unwind through the bot
-		// loop; then i18n/log so handlers run with localizer in context.
-		bot.WithMiddlewares(tb.trackInflightMiddleware, tb.recoverMiddleware, tb.i18nMiddleware, tb.logMiddleware),
+		// loop; then i18n/log/touch so handlers run with localizer in context
+		// and the user's last_seen_at gets bumped before dispatch.
+		bot.WithMiddlewares(tb.trackInflightMiddleware, tb.recoverMiddleware, tb.i18nMiddleware, tb.logMiddleware, tb.touchLastSeenMiddleware),
 	}
 
 	b, err := bot.New(cfg.BotToken, opts...)
@@ -81,6 +84,8 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, studyFSM, deps.DB, deps.Bundle, log)
 	deleteH := handlers.NewDelete(deps.Users, onbFSM, studyFSM, keyWaiter, deps.Bundle, log)
 	settingsH := handlers.NewSettings(deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
+	adminGate := func(uid int64) bool { return IsAdmin(cfg, uid) }
+	adminH := handlers.NewAdmin(adminGate, deps.Users, deps.ArticleRepo, deps.Dictionary, deps.DB, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
@@ -90,6 +95,12 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/mywords", bot.MatchTypeExact, myWordsH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/study", bot.MatchTypeExact, studyH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/delete_me", bot.MatchTypeExact, deleteH.HandleCommand)
+	// Admin commands. The handlers themselves silently no-op for non-admins
+	// (see handlers/admin.go), so registering them globally does not leak the
+	// admin surface to regular users.
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/stats", bot.MatchTypeExact, adminH.HandleStats)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/shutdown", bot.MatchTypeExact, adminH.HandleShutdown)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/whoami", bot.MatchTypeExact, adminH.HandleWhoami)
 	b.RegisterHandlerMatchFunc(matchURLText(keyWaiter), urlH.Handle)
 	b.RegisterHandlerMatchFunc(matchAPIKeyText(keyWaiter), apiKey.HandleIncomingText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLang, bot.MatchTypePrefix, onb.HandleLanguage)
@@ -224,6 +235,32 @@ func (tb *Bot) i18nMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 			lang = update.CallbackQuery.From.LanguageCode
 		}
 		ctx = tgi18n.WithLocalizer(ctx, tgi18n.For(tb.bundle, lang))
+		next(ctx, b, update)
+	}
+}
+
+// touchLastSeenMiddleware bumps `users.last_seen_at` to NOW for the
+// Telegram-id behind every incoming update. Failures are logged but do not
+// short-circuit the handler — the activity counter is best-effort, not a
+// gate. We deliberately do this AFTER the panic-recovery middleware so a
+// panic in the touch path does not break dispatch.
+func (tb *Bot) touchLastSeenMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		var tgID int64
+		switch {
+		case update.Message != nil && update.Message.From != nil:
+			tgID = update.Message.From.ID
+		case update.CallbackQuery != nil:
+			tgID = update.CallbackQuery.From.ID
+		}
+		if tgID != 0 && tb.users != nil {
+			if err := tb.users.TouchLastSeen(ctx, tgID); err != nil {
+				tb.log.Warn("touch last_seen failed",
+					"telegram_user_id", tgID,
+					"err", err,
+				)
+			}
+		}
 		next(ctx, b, update)
 	}
 }

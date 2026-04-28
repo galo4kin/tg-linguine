@@ -113,6 +113,7 @@ func main() {
 		ArticleRepo:  articleRepo,
 		ArticleWords: articleWordsRepo,
 		WordStatuses: statusRepo,
+		Dictionary:   dictRepo,
 		DB:           db,
 	})
 	if err != nil {

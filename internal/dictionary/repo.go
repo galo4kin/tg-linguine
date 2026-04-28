@@ -26,6 +26,9 @@ type Repository interface {
 	UpsertLemma(ctx context.Context, q DBTX, w DictionaryWord) (int64, error)
 	// ByID fetches a single dictionary word by primary key.
 	ByID(ctx context.Context, q DBTX, id int64) (*DictionaryWord, error)
+	// CountAll returns the total number of distinct lemmas across all users
+	// and languages — used by admin /stats.
+	CountAll(ctx context.Context, q DBTX) (int, error)
 }
 
 // ArticleWordsRepository owns the article_words join table.
@@ -139,6 +142,14 @@ func (r *sqliteRepo) UpsertLemma(ctx context.Context, q DBTX, w DictionaryWord) 
 		return 0, fmt.Errorf("dictionary: select lemma id: %w", err)
 	}
 	return id, nil
+}
+
+func (r *sqliteRepo) CountAll(ctx context.Context, q DBTX) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM dictionary_words`).Scan(&n); err != nil {
+		return 0, fmt.Errorf("dictionary: count all: %w", err)
+	}
+	return n, nil
 }
 
 func (r *sqliteRepo) ByID(ctx context.Context, q DBTX, id int64) (*DictionaryWord, error) {
