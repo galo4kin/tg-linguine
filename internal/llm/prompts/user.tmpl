@@ -1,12 +1,13 @@
-Target language: {{.TargetLanguage}}
-Native language: {{.NativeLanguage}}
-Learner CEFR level: {{.CEFR}}
+The block below is INPUT data. Read it and produce the JSON output described in the system prompt's OUTPUT SCHEMA. Do NOT echo INPUT field names in your output.
 
-Known lemmas (exclude these from the words array): {{if .KnownWords}}{{range $i, $w := .KnownWords}}{{if $i}}, {{end}}{{$w}}{{end}}{{else}}<none>{{end}}
-
-Article title: {{.ArticleTitle}}
-
-Article text:
+<<<INPUT>>>
+target_language: {{.TargetLanguage}}
+native_language: {{.NativeLanguage}}
+learner_cefr: {{.CEFR}}
+known_lemmas (exclude these from the words array): {{if .KnownWords}}{{range $i, $w := .KnownWords}}{{if $i}}, {{end}}{{$w}}{{end}}{{else}}<none>{{end}}
+article_title: {{.ArticleTitle}}
+article_text:
 {{.ArticleText}}
+<<<END INPUT>>>
 
-Return the JSON object now.
+Return the JSON output now.
