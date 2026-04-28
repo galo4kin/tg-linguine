@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"log/slog"
 	"regexp"
@@ -11,6 +12,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/nikita/tg-linguine/internal/articles"
+	"github.com/nikita/tg-linguine/internal/dictionary"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/llm"
 	"github.com/nikita/tg-linguine/internal/users"
@@ -26,12 +28,29 @@ type URLHandler struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
 	articles  *articles.Service
+	render    *cardRenderer
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
 }
 
-func NewURL(svc *users.Service, languages users.UserLanguageRepository, articleSvc *articles.Service, bundle *goi18n.Bundle, log *slog.Logger) *URLHandler {
-	return &URLHandler{users: svc, languages: languages, articles: articleSvc, bundle: bundle, log: log}
+func NewURL(
+	svc *users.Service,
+	languages users.UserLanguageRepository,
+	articleSvc *articles.Service,
+	articleRepo articles.Repository,
+	awords dictionary.ArticleWordsRepository,
+	db *sql.DB,
+	bundle *goi18n.Bundle,
+	log *slog.Logger,
+) *URLHandler {
+	return &URLHandler{
+		users:     svc,
+		languages: languages,
+		articles:  articleSvc,
+		render:    newCardRenderer(log, articleRepo, awords, articleSvc, db),
+		bundle:    bundle,
+		log:       log,
+	}
 }
 
 func MatchURLMessage(u *models.Update) bool {
@@ -101,42 +120,31 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 		return
 	}
 
-	if statusMsg != nil {
-		preview := make([]string, 0, len(result.Words))
-		for _, w := range result.Words {
-			preview = append(preview, w.Lemma)
-		}
-		view := DefaultCardView()
-
-		userCEFR := ""
-		if active, err := h.languages.Active(ctx, u.ID); err == nil && active != nil {
-			userCEFR = active.CEFRLevel
-		}
-
-		article := result.Article
-		// Cache hit on a previously analyzed URL may not yet have the user's
-		// current CEFR adaptation if the user changed level between analyses;
-		// regen lazily so the card lands fully populated.
-		if abs, ok := resolveAbsoluteLevel(userCEFR, view.Level); ok {
-			if cur := article.ParseAdaptedVersions(); cur[abs] == "" {
-				editStatus(tgi18n.T(loc, "article.regenerating", map[string]string{"Level": abs}))
-				if _, err := h.articles.Adapt(ctx, u.ID, article.ID, abs); err != nil {
-					h.log.Warn("url: regen", "err", err, "article_id", article.ID, "target", abs)
-				} else if reloaded, err := h.articles.ArticleByID(ctx, article.ID); err == nil {
-					article = reloaded
-				}
-			}
-		}
-
-		if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-			ChatID:      msg.Chat.ID,
-			MessageID:   statusMsg.ID,
-			Text:        renderArticleCard(loc, article, userCEFR, preview, len(result.Words), view),
-			ReplyMarkup: articleCardKeyboard(loc, article, userCEFR, len(result.Words), view),
-		}); err != nil {
-			h.log.Debug("url: send card", "err", err)
-		}
+	if statusMsg == nil {
+		return
 	}
+
+	preview := make([]string, 0, len(result.Words))
+	for _, w := range result.Words {
+		preview = append(preview, w.Lemma)
+	}
+	view := DefaultCardView()
+
+	userCEFR := ""
+	if active, err := h.languages.Active(ctx, u.ID); err == nil && active != nil {
+		userCEFR = active.CEFRLevel
+	}
+
+	// Cache hit on a previously analyzed URL may not yet have the user's
+	// current CEFR adaptation if the user changed level between analyses;
+	// the renderer regenerates lazily so the card lands fully populated.
+	h.render.renderInline(
+		ctx, b,
+		msg.Chat.ID, statusMsg.ID,
+		loc, u.ID, userCEFR,
+		result.Article, preview, len(result.Words),
+		view, "url",
+	)
 }
 
 func articleErrorMessageID(err error) string {
@@ -165,4 +173,3 @@ func articleErrorMessageID(err error) string {
 		return "error.generic"
 	}
 }
-

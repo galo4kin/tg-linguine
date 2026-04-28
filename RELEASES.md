@@ -1,5 +1,14 @@
 # Releases
 
+## 20.5 — refactor-open-article-helper
+Три копии «открыть карточку статьи»-флоу (`hist:open`, `art:`-callback
+и cache-hit ветка url-handler-а) сведены в общий `cardRenderer` в
+`internal/telegram/handlers/card_render.go`: load → ownership → count
+→ preview → ensure-adapted (regen + reload) → render. Url-handler
+теперь тоже показывает локализованное сообщение при ошибке regen
+(раньше писал только в лог), а тонкая обёртка `articles.Service.
+ArticleByID` удалена за ненадобностью.
+
 ## 20 — settings-menu
 Появилась команда `/settings` и callback-семейство `set:*` —
 inline-меню с пятью пунктами: язык интерфейса (ru/en/es), активный

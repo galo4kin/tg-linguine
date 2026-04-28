@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"database/sql"
-	"errors"
 	"fmt"
 	"log/slog"
 	"strconv"
@@ -37,8 +36,7 @@ type History struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
 	articles  articles.Repository
-	awords    dictionary.ArticleWordsRepository
-	regen     CardRegenerator
+	render    *cardRenderer
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
 	db        *sql.DB
@@ -58,8 +56,7 @@ func NewHistory(
 		users:     svc,
 		languages: languages,
 		articles:  articleRepo,
-		awords:    awords,
-		regen:     regen,
+		render:    newCardRenderer(log, articleRepo, awords, regen, db),
 		bundle:    bundle,
 		log:       log,
 		db:        db,
@@ -122,7 +119,11 @@ func (h *History) HandleCallback(ctx context.Context, b *bot.Bot, update *models
 			h.log.Warn("history cb: bad article id", "data", cq.Data, "err", err)
 			return
 		}
-		h.openArticle(ctx, b, chatID, msgID, u.ID, loc, articleID)
+		userCEFR := ""
+		if active, err := h.languages.Active(ctx, u.ID); err == nil && active != nil {
+			userCEFR = active.CEFRLevel
+		}
+		h.render.openByID(ctx, b, chatID, msgID, loc, u.ID, userCEFR, articleID, DefaultCardView(), "history open")
 	default:
 		h.log.Warn("history cb: unknown payload", "data", cq.Data)
 	}
@@ -185,83 +186,6 @@ func (h *History) buildPage(ctx context.Context, userID int64, loc *goi18n.Local
 
 	header := tgi18n.T(loc, "history.header", map[string]int{"Page": page + 1, "Total": totalPages})
 	return header, historyKeyboard(loc, rows, page, totalPages), true
-}
-
-func (h *History) openArticle(ctx context.Context, b *bot.Bot, chatID any, msgID int, userID int64, loc *goi18n.Localizer, articleID int64) {
-	article, err := h.articles.ByID(ctx, h.db, articleID)
-	if err != nil {
-		if errors.Is(err, articles.ErrNotFound) {
-			h.log.Warn("history open: not found", "article_id", articleID)
-		} else {
-			h.log.Error("history open: load", "err", err)
-		}
-		return
-	}
-	if article.UserID != userID {
-		h.log.Warn("history open: ownership mismatch", "article_id", articleID, "user_id", userID)
-		return
-	}
-
-	totalWords, err := h.awords.CountByArticle(ctx, h.db, articleID)
-	if err != nil {
-		h.log.Error("history open: word count", "err", err)
-		return
-	}
-
-	var preview []string
-	if totalWords > 0 {
-		views, err := h.awords.PageByArticle(ctx, h.db, articleID, articleCardPreviewLimit, 0)
-		if err != nil {
-			h.log.Error("history open: word preview", "err", err)
-			return
-		}
-		preview = make([]string, 0, len(views))
-		for _, v := range views {
-			preview = append(preview, v.Lemma)
-		}
-	}
-
-	userCEFR := ""
-	if active, err := h.languages.Active(ctx, userID); err == nil && active != nil {
-		userCEFR = active.CEFRLevel
-	}
-
-	view := DefaultCardView()
-	if abs, ok := resolveAbsoluteLevel(userCEFR, view.Level); ok && h.regen != nil {
-		if cur := article.ParseAdaptedVersions(); cur[abs] == "" {
-			if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-				ChatID:    chatID,
-				MessageID: msgID,
-				Text:      tgi18n.T(loc, "article.regenerating", map[string]string{"Level": abs}),
-			}); err != nil {
-				h.log.Debug("history open: edit status", "err", err)
-			}
-			if _, err := h.regen.Adapt(ctx, userID, articleID, abs); err != nil {
-				h.log.Warn("history open: regen", "err", err, "article_id", articleID, "target", abs)
-				if _, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-					ChatID:    chatID,
-					MessageID: msgID,
-					Text:      tgi18n.T(loc, articleErrorMessageID(err), nil),
-				}); editErr != nil {
-					h.log.Debug("history open: edit error", "err", editErr)
-				}
-				return
-			}
-			if reloaded, err := h.articles.ByID(ctx, h.db, articleID); err == nil {
-				article = reloaded
-			}
-		}
-	}
-
-	text := renderArticleCard(loc, article, userCEFR, preview, totalWords, view)
-	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   msgID,
-		Text:        text,
-		ReplyMarkup: articleCardKeyboard(loc, article, userCEFR, totalWords, view),
-	}); err != nil {
-		h.log.Debug("history open: edit", "err", err)
-	}
 }
 
 func historyKeyboard(loc *goi18n.Localizer, rows []articles.Article, page, totalPages int) *models.InlineKeyboardMarkup {

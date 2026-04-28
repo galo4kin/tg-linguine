@@ -245,13 +245,6 @@ func progress(p ProgressFunc, s Stage) {
 	}
 }
 
-// ArticleByID is a thin pass-through to the repository for callers that
-// already depend on the Service (e.g. handlers triggering regen) and don't
-// want to take a separate dependency on the repo.
-func (s *Service) ArticleByID(ctx context.Context, id int64) (*Article, error) {
-	return s.articles.ByID(ctx, s.db, id)
-}
-
 // Adapt fills in a missing per-level adaptation for a stored article. It
 // resolves the user's API key, picks the closest available source text from
 // the article's existing adaptations, calls the LLM mini-prompt, and merges
