@@ -1,0 +1,13 @@
+{
+  "summary_target": "Some summary.",
+  "summary_native": "Какое-то резюме.",
+  "category": "Other",
+  "cefr_detected": "B1",
+  "adapted_versions": {
+    "lower": "Easy.",
+    "current": "",
+    "higher": "Harder."
+  },
+  "words": [],
+  "safety_flags": []
+}

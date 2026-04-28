@@ -1,0 +1,59 @@
+{
+  "summary_target": "An old English joke about a chicken crossing the road, explained as an anti-joke and a pragmatics example for language learners.",
+  "summary_native": "Старая английская шутка про курицу, перешедшую дорогу — пример анти-шутки и культурного контекста для изучающих язык.",
+  "category": "Culture",
+  "cefr_detected": "B1",
+  "adapted_versions": {
+    "lower": "A chicken crosses the road. The joke is funny because the answer is too simple. People have told this joke for many years. To understand it you need to know how jokes usually work in English. It is also a small lesson about culture and language.",
+    "current": "The chicken-crossed-the-road joke is an English classic. The humour comes from giving a flat, obvious answer where the listener expects a clever punchline. Linguists call this an anti-joke and use it to teach pragmatics: meaning depends on cultural context, not just on the words themselves.",
+    "higher": "The hoary chicken-and-road joke survives precisely because it inverts the conventions of joke structure: a literal, anticlimactic resolution defies the expectation of misdirection-and-payoff. Pragmatically, it doubles as a textbook case for language learners — competence in a tongue requires not just lexicon and syntax but the cultural scaffolding that signals when a flat answer is itself the point."
+  },
+  "words": [
+    {
+      "surface_form": "anticlimactic",
+      "lemma": "anticlimactic",
+      "pos": "adjective",
+      "transcription_ipa": "/ˌæntiklaɪˈmæktɪk/",
+      "translation_native": "разочаровывающий после нарастания напряжения",
+      "example_target": "The ending of the film was anticlimactic.",
+      "example_native": "Концовка фильма оказалась разочаровывающей."
+    },
+    {
+      "surface_form": "pragmatics",
+      "lemma": "pragmatics",
+      "pos": "noun",
+      "transcription_ipa": "/præɡˈmætɪks/",
+      "translation_native": "прагматика (раздел лингвистики)",
+      "example_target": "Pragmatics studies how context shapes meaning.",
+      "example_native": "Прагматика изучает, как контекст влияет на смысл."
+    },
+    {
+      "surface_form": "misdirection",
+      "lemma": "misdirection",
+      "pos": "noun",
+      "transcription_ipa": "/ˌmɪsdəˈrekʃən/",
+      "translation_native": "отвлечение внимания, ложный след",
+      "example_target": "The magician relied on misdirection.",
+      "example_native": "Фокусник полагался на отвлечение внимания."
+    },
+    {
+      "surface_form": "fluency",
+      "lemma": "fluency",
+      "pos": "noun",
+      "transcription_ipa": "/ˈfluːənsi/",
+      "translation_native": "беглость, свободное владение",
+      "example_target": "She speaks with native-like fluency.",
+      "example_native": "Она говорит с почти родной беглостью."
+    },
+    {
+      "surface_form": "touchstone",
+      "lemma": "touchstone",
+      "pos": "noun",
+      "transcription_ipa": "/ˈtʌtʃstəʊn/",
+      "translation_native": "пробный камень, эталон",
+      "example_target": "This novel became a cultural touchstone.",
+      "example_native": "Этот роман стал культурным эталоном."
+    }
+  ],
+  "safety_flags": []
+}
