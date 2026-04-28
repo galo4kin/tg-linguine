@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"path/filepath"
+	"strconv"
 	"testing"
 
 	"github.com/nikita/tg-linguine/internal/articles"
@@ -341,5 +342,113 @@ func TestUserWordStatus_PageUserWords_FiltersAndOrder(t *testing.T) {
 	}
 	if len(rows) != 2 || rows[0].Lemma != "run" || rows[1].Lemma != "skip" {
 		t.Fatalf("page2 unexpected: %+v", rows)
+	}
+}
+
+func TestUserWordStatus_RecordCorrect_ThresholdPromotion(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	wid, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "tree"})
+	if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{
+		UserID: 1, DictionaryWordID: wid, Status: dictionary.StatusLearning,
+	}); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	// Two correct → still learning.
+	for i := 1; i <= 2; i++ {
+		streak, mastered, err := statuses.RecordCorrect(ctx, db, 1, wid, 3)
+		if err != nil {
+			t.Fatalf("rc%d: %v", i, err)
+		}
+		if streak != i || mastered {
+			t.Fatalf("after rc%d: streak=%d mastered=%v", i, streak, mastered)
+		}
+	}
+
+	// One wrong resets streak; status stays learning.
+	if err := statuses.RecordWrong(ctx, db, 1, wid); err != nil {
+		t.Fatalf("rw: %v", err)
+	}
+	got, err := statuses.Get(ctx, db, 1, wid)
+	if err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.CorrectStreak != 0 {
+		t.Fatalf("streak after wrong: %d", got.CorrectStreak)
+	}
+	if got.Status != dictionary.StatusLearning {
+		t.Fatalf("status after wrong: %s", got.Status)
+	}
+	if got.WrongTotal != 1 {
+		t.Fatalf("wrong_total: %d", got.WrongTotal)
+	}
+
+	// Three correct in a row → mastered on the third.
+	for i := 1; i <= 2; i++ {
+		_, mastered, err := statuses.RecordCorrect(ctx, db, 1, wid, 3)
+		if err != nil {
+			t.Fatalf("rc%d (post-reset): %v", i, err)
+		}
+		if mastered {
+			t.Fatalf("mastered too early at %d", i)
+		}
+	}
+	streak, mastered, err := statuses.RecordCorrect(ctx, db, 1, wid, 3)
+	if err != nil {
+		t.Fatalf("rc3 (post-reset): %v", err)
+	}
+	if streak != 3 || !mastered {
+		t.Fatalf("expected promotion at streak=3, got streak=%d mastered=%v", streak, mastered)
+	}
+	got, err = statuses.Get(ctx, db, 1, wid)
+	if err != nil {
+		t.Fatalf("get final: %v", err)
+	}
+	if got.Status != dictionary.StatusMastered {
+		t.Fatalf("final status: %s", got.Status)
+	}
+}
+
+func TestUserWordStatus_SampleArticleWords_LatestPerWord(t *testing.T) {
+	db := newTestDB(t)
+	artRepo := articles.NewSQLiteRepository(db)
+	dict := dictionary.NewSQLiteRepository(db)
+	awRepo := dictionary.NewSQLiteArticleWordsRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	wid, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "house"})
+
+	for i, surface := range []string{"houses", "houses (old)", "houses (new)"} {
+		a := &articles.Article{
+			UserID: 1, SourceURL: "https://x/" + strconv.Itoa(i), SourceURLHash: "h" + strconv.Itoa(i),
+			Title: "t", LanguageCode: "en",
+		}
+		if err := artRepo.Insert(ctx, db, a); err != nil {
+			t.Fatalf("seed article %d: %v", i, err)
+		}
+		if err := awRepo.Insert(ctx, db, dictionary.ArticleWord{
+			ArticleID: a.ID, DictionaryWordID: wid, SurfaceForm: surface,
+			ExampleTarget: "e" + strconv.Itoa(i),
+		}); err != nil {
+			t.Fatalf("seed aw %d: %v", i, err)
+		}
+	}
+
+	got, err := statuses.SampleArticleWords(ctx, db, []int64{wid})
+	if err != nil {
+		t.Fatalf("sample: %v", err)
+	}
+	s, ok := got[wid]
+	if !ok {
+		t.Fatalf("expected sample for wid=%d", wid)
+	}
+	// rowid grows with insertion order, so the "(new)" surface should win.
+	if s.SurfaceForm != "houses (new)" || s.ExampleTarget != "e2" {
+		t.Fatalf("expected latest sample, got %+v", s)
 	}
 }

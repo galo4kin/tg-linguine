@@ -77,6 +77,42 @@ type UserWordStatusRepository interface {
 	// `offset`, ordered alphabetically by lemma. Same status semantics as
 	// CountUserWords.
 	PageUserWords(ctx context.Context, q DBTX, userID int64, languageCode string, statuses []WordStatus, limit, offset int) ([]UserWordEntry, error)
+	// LearningQueue returns up to `limit` words the user is currently
+	// learning in the given language, oldest `updated_at` first so cards
+	// the user has not seen recently are surfaced before fresh ones.
+	LearningQueue(ctx context.Context, q DBTX, userID int64, languageCode string, limit int) ([]LearningEntry, error)
+	// SampleArticleWords returns one representative article_words row per
+	// requested word id (the most recent occurrence by article id), keyed
+	// by dictionary_word_id. Words with no article occurrence are absent.
+	SampleArticleWords(ctx context.Context, q DBTX, wordIDs []int64) (map[int64]ArticleWordSample, error)
+	// RecordCorrect increments the (user, word) pair's correct counters and
+	// promotes the row to `mastered` once correct_streak reaches threshold.
+	// Returns the post-update streak and whether the status flipped this
+	// call.
+	RecordCorrect(ctx context.Context, q DBTX, userID, wordID int64, threshold int) (newStreak int, mastered bool, err error)
+	// RecordWrong resets correct_streak to 0 and increments wrong_total.
+	RecordWrong(ctx context.Context, q DBTX, userID, wordID int64) error
+}
+
+// LearningEntry is the minimal projection used to assemble a study deck.
+// Article-side fields (surface form, examples) come from
+// SampleArticleWords so the queue query stays cheap.
+type LearningEntry struct {
+	DictionaryWordID int64
+	Lemma            string
+	POS              string
+	TranscriptionIPA string
+	CorrectStreak    int
+}
+
+// ArticleWordSample is one representative article_words row used to
+// decorate a study card with its surface form and example sentences.
+type ArticleWordSample struct {
+	DictionaryWordID  int64
+	SurfaceForm       string
+	TranslationNative string
+	ExampleTarget     string
+	ExampleNative     string
 }
 
 type sqliteRepo struct{ db *sql.DB }
@@ -325,6 +361,119 @@ func (r *sqliteStatusRepo) PageUserWords(ctx context.Context, q DBTX, userID int
 		return nil, fmt.Errorf("dictionary: iter user words: %w", err)
 	}
 	return out, nil
+}
+
+func (r *sqliteStatusRepo) LearningQueue(ctx context.Context, q DBTX, userID int64, languageCode string, limit int) ([]LearningEntry, error) {
+	const stmt = `
+		SELECT dw.id, dw.lemma, COALESCE(dw.pos, ''),
+		       COALESCE(dw.transcription_ipa, ''), uws.correct_streak
+		FROM user_word_status uws
+		JOIN dictionary_words dw ON dw.id = uws.dictionary_word_id
+		WHERE uws.user_id = ? AND dw.language_code = ? AND uws.status = ?
+		ORDER BY uws.updated_at ASC
+		LIMIT ?
+	`
+	rows, err := q.QueryContext(ctx, stmt, userID, languageCode, string(StatusLearning), limit)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: learning queue: %w", err)
+	}
+	defer rows.Close()
+	var out []LearningEntry
+	for rows.Next() {
+		var e LearningEntry
+		if err := rows.Scan(&e.DictionaryWordID, &e.Lemma, &e.POS, &e.TranscriptionIPA, &e.CorrectStreak); err != nil {
+			return nil, fmt.Errorf("dictionary: scan learning entry: %w", err)
+		}
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dictionary: iter learning queue: %w", err)
+	}
+	return out, nil
+}
+
+func (r *sqliteStatusRepo) SampleArticleWords(ctx context.Context, q DBTX, wordIDs []int64) (map[int64]ArticleWordSample, error) {
+	out := make(map[int64]ArticleWordSample, len(wordIDs))
+	if len(wordIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(wordIDs))
+	args := make([]any, 0, len(wordIDs))
+	for i, id := range wordIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	// Pick the latest article_words row per dictionary_word_id by max(rowid)
+	// — rowid grows monotonically as rows are inserted, so it's a stable
+	// recency proxy without needing a created_at column.
+	stmt := `
+		SELECT aw.dictionary_word_id, aw.surface_form,
+		       COALESCE(aw.translation_native, ''),
+		       COALESCE(aw.example_target, ''),
+		       COALESCE(aw.example_native, '')
+		FROM article_words aw
+		JOIN (
+			SELECT dictionary_word_id, MAX(rowid) AS rid
+			FROM article_words
+			WHERE dictionary_word_id IN (` + strings.Join(placeholders, ",") + `)
+			GROUP BY dictionary_word_id
+		) latest ON latest.dictionary_word_id = aw.dictionary_word_id AND latest.rid = aw.rowid
+	`
+	rows, err := q.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: sample article_words: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var s ArticleWordSample
+		if err := rows.Scan(&s.DictionaryWordID, &s.SurfaceForm, &s.TranslationNative, &s.ExampleTarget, &s.ExampleNative); err != nil {
+			return nil, fmt.Errorf("dictionary: scan article_words sample: %w", err)
+		}
+		out[s.DictionaryWordID] = s
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dictionary: iter article_words sample: %w", err)
+	}
+	return out, nil
+}
+
+func (r *sqliteStatusRepo) RecordCorrect(ctx context.Context, q DBTX, userID, wordID int64, threshold int) (int, bool, error) {
+	const stmt = `
+		UPDATE user_word_status
+		SET correct_streak = correct_streak + 1,
+		    correct_total  = correct_total + 1,
+		    status         = CASE WHEN correct_streak + 1 >= ? THEN 'mastered' ELSE status END,
+		    updated_at     = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND dictionary_word_id = ?
+		RETURNING correct_streak, status
+	`
+	var streak int
+	var status string
+	if err := q.QueryRowContext(ctx, stmt, threshold, userID, wordID).Scan(&streak, &status); err != nil {
+		if errors.Is(err, sql.ErrNoRows) {
+			return 0, false, ErrNotFound
+		}
+		return 0, false, fmt.Errorf("dictionary: record correct: %w", err)
+	}
+	return streak, WordStatus(status) == StatusMastered, nil
+}
+
+func (r *sqliteStatusRepo) RecordWrong(ctx context.Context, q DBTX, userID, wordID int64) error {
+	const stmt = `
+		UPDATE user_word_status
+		SET correct_streak = 0,
+		    wrong_total    = wrong_total + 1,
+		    updated_at     = CURRENT_TIMESTAMP
+		WHERE user_id = ? AND dictionary_word_id = ?
+	`
+	res, err := q.ExecContext(ctx, stmt, userID, wordID)
+	if err != nil {
+		return fmt.Errorf("dictionary: record wrong: %w", err)
+	}
+	if n, err := res.RowsAffected(); err == nil && n == 0 {
+		return ErrNotFound
+	}
+	return nil
 }
 
 // buildUserWordsQuery composes the count/page queries from the same WHERE

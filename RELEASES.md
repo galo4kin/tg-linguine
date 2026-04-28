@@ -1,5 +1,14 @@
 # Releases
 
+## 22 — flashcards
+Появилась команда `/study` и callback-семейство `study:*` —
+flashcard-сессии по словам в статусе `learning`. FSM в
+`internal/session/study.go` ведёт колоду, счётчики и список
+освоенных лемм; репозиторий получил `LearningQueue`,
+`SampleArticleWords`, `RecordCorrect` (с порогом 3 для перевода в
+`mastered`) и `RecordWrong`. Тесты на FSM и DB-уровень покрывают
+«3 подряд → mastered» и «ошибка обнуляет streak».
+
 ## 21 — my-words
 Появилась команда `/mywords`: inline-меню со словарём пользователя по
 активному языку с фильтрами All / Learning / Known / Mastered и
