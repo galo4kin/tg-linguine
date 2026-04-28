@@ -1,5 +1,18 @@
 # Releases
 
+## 20 — settings-menu
+Появилась команда `/settings` и callback-семейство `set:*` —
+inline-меню с пятью пунктами: язык интерфейса (ru/en/es), активный
+изучаемый язык, уровень CEFR, API-ключ и заглушка для удаления данных
+(до шага 24). Под капотом добавлены `users.Repository.UpdateInterface
+Language` + `users.Service.SetInterfaceLanguage`, а
+`UserLanguageRepository` обзавёлся `List`, `Activate` и `SetCEFR`.
+Смена интерфейсного языка отражается сразу: confirmation
+рендерится новым localizer-ом. Добавление нового изучаемого языка
+ведёт к под-меню выбора CEFR; пункт «API-ключ» переводит в
+существующий setkey-flow через `session.APIKeyWaiter`. i18n-строки
+`settings.*` добавлены в ru/en/es.
+
 ## 19 — regen-on-level-change
 Поле `articles.adapted_versions` переехало с относительной модели
 `{lower,current,higher}` на абсолютную карту по CEFR (`{"A1":"…", …,

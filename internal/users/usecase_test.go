@@ -39,6 +39,16 @@ func (m *memRepo) Create(ctx context.Context, u *User) error {
 	return nil
 }
 
+func (m *memRepo) UpdateInterfaceLanguage(ctx context.Context, id int64, lang string) error {
+	for _, u := range m.byID {
+		if u.ID == id {
+			u.InterfaceLanguage = lang
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 func TestRegisterUser_CreatesNewUser(t *testing.T) {
 	repo := newMemRepo()
 	svc := NewService(repo)

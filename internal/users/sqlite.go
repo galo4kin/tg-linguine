@@ -90,6 +90,24 @@ func (r *sqliteRepo) Create(ctx context.Context, u *User) error {
 	return nil
 }
 
+func (r *sqliteRepo) UpdateInterfaceLanguage(ctx context.Context, id int64, lang string) error {
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE users SET interface_language = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`,
+		lang, id,
+	)
+	if err != nil {
+		return fmt.Errorf("users: UpdateInterfaceLanguage: %w", err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("users: UpdateInterfaceLanguage rows: %w", err)
+	}
+	if n == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
 func nullString(s string) any {
 	if s == "" {
 		return nil
