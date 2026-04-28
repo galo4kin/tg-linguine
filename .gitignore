@@ -22,4 +22,5 @@ vendor/
 .claude/memory-compiler/scripts/session-flush-*
 .claude/memory-compiler/scripts/flush-context-*
 .claude/memory-compiler/.venv/
+__pycache__/
 
