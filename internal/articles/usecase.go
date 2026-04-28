@@ -27,18 +27,16 @@ var (
 )
 
 // DefaultMaxTokensPerArticle is the fallback used when ServiceDeps.MaxTokens
-// is left at zero. 10000 is the largest input we can confidently send on
-// Groq's free tier without tripping HTTP 413 — paid-tier deployments can
-// raise MAX_TOKENS_PER_ARTICLE in env to take advantage of the model's
-// 128K context window.
-const DefaultMaxTokensPerArticle = 10000
+// is left at zero. Tuned for Groq's free-tier 12K TPM cap: 6K article body
+// + 3K reserved JSON output + ~1K system prompt + scaffolding fits with a
+// safety margin. Paid-tier deployments can raise MAX_TOKENS_PER_ARTICLE in
+// env to take advantage of the model's 128K context.
+const DefaultMaxTokensPerArticle = 6000
 
 // summarizeInputBudget caps the tokens we feed into the pre-summary call
-// itself. Set to match the free-tier per-request cap so the compress call
-// does not 413 before we ever reach the analyze step. Paid-tier users who
-// raise MAX_TOKENS_PER_ARTICLE benefit from the analyze side; the compress
-// input stays bounded here regardless.
-const summarizeInputBudget = 12000
+// itself. Total request must respect Groq free-tier 12K TPM: 7500 input +
+// ~3500 reserved output + ~500 system prompt ≈ 11.5K, just under the cap.
+const summarizeInputBudget = 7500
 
 // LongAnalysisMode is selected by the user when an article exceeds the
 // per-request token budget. Both modes always produce a stored article;
@@ -370,14 +368,20 @@ func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID 
 			}
 			return nil, fmt.Errorf("api key: %w", err)
 		}
-		// Cap the input to the summarize call so an outlier-sized article
-		// does not blow past the model's context window on the way in.
+		// Cap the input to the summarize call so the request does not blow
+		// past Groq's TPM ceiling on the way in. TargetTokens is half the
+		// per-article budget so the resulting summary leaves room for the
+		// downstream analyze call (input ≈ summary, output ~3K reserved).
 		summarizeIn, _ := TruncateAtParagraph(extracted.Content, summarizeInputBudget)
+		target := s.maxTokens / 2
+		if target < 2000 {
+			target = 2000
+		}
 		summary, err := s.llm.Summarize(ctx, key, llm.SummarizeRequest{
 			TargetLanguage: active.LanguageCode,
 			ArticleTitle:   extracted.Title,
 			ArticleText:    summarizeIn,
-			TargetTokens:   s.maxTokens - 1000,
+			TargetTokens:   target,
 		})
 		if err != nil {
 			return nil, err

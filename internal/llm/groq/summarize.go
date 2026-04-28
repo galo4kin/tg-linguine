@@ -32,7 +32,14 @@ func (c *Client) Summarize(ctx context.Context, key string, req llm.SummarizeReq
 		{Role: "user", Content: userPrompt},
 	}
 
-	body, err := c.chatPlainText(ctx, key, model, messages)
+	// Cap the model's output budget at TargetTokens + slack so Groq's
+	// TPM accounting (input + reserved output) does not blow past the
+	// free-tier 12K ceiling. The +500 covers minor model overshoot.
+	maxOut := req.TargetTokens + 500
+	if maxOut <= 0 {
+		maxOut = 2000
+	}
+	body, err := c.chatPlainText(ctx, key, model, messages, maxOut)
 	if err != nil {
 		return "", err
 	}
@@ -42,11 +49,12 @@ func (c *Client) Summarize(ctx context.Context, key string, req llm.SummarizeReq
 // chatPlainText is the prose-output sibling of chat. It omits the
 // response_format=json_object hint so the model is free to return plain
 // text. Retry / status mapping is identical.
-func (c *Client) chatPlainText(ctx context.Context, key, model string, messages []chatMessage) (string, error) {
+func (c *Client) chatPlainText(ctx context.Context, key, model string, messages []chatMessage, maxTokens int) (string, error) {
 	body, err := json.Marshal(struct {
-		Model    string        `json:"model"`
-		Messages []chatMessage `json:"messages"`
-	}{Model: model, Messages: messages})
+		Model     string        `json:"model"`
+		Messages  []chatMessage `json:"messages"`
+		MaxTokens int           `json:"max_tokens,omitempty"`
+	}{Model: model, Messages: messages, MaxTokens: maxTokens})
 	if err != nil {
 		return "", fmt.Errorf("groq: marshal request: %w", err)
 	}

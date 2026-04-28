@@ -27,7 +27,17 @@ type chatRequest struct {
 	Messages       []chatMessage      `json:"messages"`
 	ResponseFormat chatResponseFormat `json:"response_format"`
 	Temperature    float64            `json:"temperature,omitempty"`
+	// MaxTokens caps the response size. Groq's free tier counts
+	// input + reserved output toward TPM (12K total), so leaving this
+	// unset makes the model reserve its default ~16K output and 413 even
+	// modest requests. Always set explicitly per call site.
+	MaxTokens int `json:"max_tokens,omitempty"`
 }
+
+// analyzeMaxCompletionTokens bounds the JSON analysis response. 3000 is
+// enough for summary_target + summary_native + 3 adapted versions + words
+// list + safety flags while leaving budget room under Groq's 12K TPM cap.
+const analyzeMaxCompletionTokens = 3000
 
 type chatChoice struct {
 	Message chatMessage `json:"message"`
@@ -89,6 +99,7 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		Model:          model,
 		Messages:       messages,
 		ResponseFormat: chatResponseFormat{Type: "json_object"},
+		MaxTokens:      analyzeMaxCompletionTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("groq: marshal request: %w", err)
