@@ -1,5 +1,11 @@
 # Releases
 
+## 27.5 — refactor-estimate-tokens
+Дубль эвристики `runes/4` устранён: единственная реализация
+`EstimateTokens` живёт в `internal/llm`, а `articles.AnalyzeArticle`
+и тесты `internal/articles/long_test.go` импортируют её оттуда.
+`make build` и `make test` зелёные.
+
 ## 28 — tests
 Доменные пакеты подтянуты к ≥70% покрытия: добавлены unit-тесты на
 `users.codes` (`IsCEFR`, `CEFRShift`, `IsSupportedLearningLanguage`),

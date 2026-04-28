@@ -9,6 +9,7 @@ import (
 
 	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/dictionary"
+	"github.com/nikita/tg-linguine/internal/llm"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -25,7 +26,7 @@ func TestEstimateTokens_LenDiv4(t *testing.T) {
 		{"a b c d e f g h", 4}, // 15 runes / 4 = 4
 	}
 	for _, c := range cases {
-		if got := articles.EstimateTokens(c.in); got != c.want {
+		if got := llm.EstimateTokens(c.in); got != c.want {
 			t.Errorf("EstimateTokens(%q) = %d, want %d", c.in, got, c.want)
 		}
 	}
@@ -150,7 +151,7 @@ func TestAnalyzeArticle_BoundaryAtLimitPasses(t *testing.T) {
 	const limit = 1000
 	// Body sized to land on exactly `limit` tokens via the rune/4 heuristic.
 	body := makeBody(limit * 4)
-	if got := articles.EstimateTokens(body); got != limit {
+	if got := llm.EstimateTokens(body); got != limit {
 		t.Fatalf("test fixture: EstimateTokens(body) = %d, want %d", got, limit)
 	}
 

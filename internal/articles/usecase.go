@@ -49,27 +49,6 @@ func (e *TooLongError) Is(target error) bool {
 // 8k-context model — see _10_todo/26-long-articles.md.
 const DefaultMaxTokensPerArticle = 7000
 
-// EstimateTokens is the heuristic used by AnalyzeArticle to gate
-// over-long articles before they reach the LLM. We deliberately stay
-// CGO-free, so instead of pulling in tiktoken we count runes and divide
-// by 4 — empirically close enough for English/Spanish/Russian prose
-// (within ~15% of the BPE count) and never under-counts in a way that
-// would let an 8k-context model OOM the prompt.
-func EstimateTokens(text string) int {
-	if text == "" {
-		return 0
-	}
-	runes := 0
-	for range text {
-		runes++
-	}
-	tokens := runes / 4
-	if runes%4 != 0 {
-		tokens++
-	}
-	return tokens
-}
-
 // ApproxWordCount is purely for the user-facing rejection message — we tell
 // the user how many words their article is so they have a sense of how much
 // to trim. strings.Fields gives a good-enough split for any whitespace.
@@ -243,7 +222,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 	// Token-budget gate: bail out before spending Groq tokens on something
 	// the model cannot fit anyway. The boundary case (estimate == limit) is
 	// allowed — only strictly-greater values are rejected.
-	tokensEstimated := EstimateTokens(extracted.Content)
+	tokensEstimated := llm.EstimateTokens(extracted.Content)
 	if tokensEstimated > s.maxTokens {
 		words := ApproxWordCount(extracted.Content)
 		if s.log != nil {
