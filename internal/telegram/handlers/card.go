@@ -167,10 +167,14 @@ func articleCardKeyboard(loc *goi18n.Localizer, article *articles.Article, userC
 
 	if totalWords > 0 {
 		rows = append(rows, []models.InlineKeyboardButton{{
-			Text:         tgi18n.T(loc, "article.card.show_all_words", nil),
+			Text:         tgi18n.T(loc, "article.card.new_words", nil),
 			CallbackData: fmt.Sprintf("%s%d:0", CallbackPrefixWords, article.ID),
 		}})
 	}
+	rows = append(rows, []models.InlineKeyboardButton{{
+		Text:         tgi18n.T(loc, "article.card.show_all_words", nil),
+		CallbackData: CallbackPrefixStudy + "start",
+	}})
 
 	if len(rows) == 0 {
 		return nil

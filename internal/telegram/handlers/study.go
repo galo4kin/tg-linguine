@@ -113,6 +113,22 @@ func (h *Study) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 	switch {
 	case payload == "close":
 		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+	case payload == "start":
+		deck, ok := h.buildDeck(ctx, u.ID, loc)
+		if !ok {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: chatID,
+				Text:   tgi18n.T(loc, "study.empty", nil),
+			})
+			return
+		}
+		h.fsm.Start(u.ID, deck)
+		snap, _ := h.fsm.Snapshot(u.ID)
+		b.SendMessage(ctx, &bot.SendMessageParams{
+			ChatID:      chatID,
+			Text:        renderStudyCard(loc, snap),
+			ReplyMarkup: studyCardKeyboard(loc, snap.Current().DictionaryWordID),
+		})
 	case payload == "end":
 		h.endAndSummarize(ctx, b, u.ID, loc, chatID, msgID)
 	case strings.HasPrefix(payload, "hit:") || strings.HasPrefix(payload, "miss:"):
