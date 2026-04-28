@@ -85,10 +85,6 @@ func (h *Words) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 	}
 	data := strings.TrimPrefix(cq.Data, CallbackPrefixWords)
 
-	if data == "close" {
-		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
-		return
-	}
 	if data == "noop" {
 		return
 	}
@@ -366,7 +362,10 @@ func wordsKeyboard(
 		rows = append(rows, []models.InlineKeyboardButton{prev, next})
 	}
 
-	closeBtn := models.InlineKeyboardButton{Text: closeText, CallbackData: CallbackPrefixWords + "close"}
+	closeBtn := models.InlineKeyboardButton{
+		Text:         closeText,
+		CallbackData: fmt.Sprintf("%sv:%d:c:t", CallbackPrefixCard, articleID),
+	}
 	rows = append(rows, []models.InlineKeyboardButton{closeBtn})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
