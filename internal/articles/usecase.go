@@ -115,9 +115,9 @@ type ProgressFunc func(Stage)
 // a single-line banner above the card. Empty for normal full-article
 // analyses and for cache replays.
 type AnalyzedArticle struct {
-	Article *Article
-	Words   []dictionary.DictionaryWord
-	Notice  string
+	Stored *Article
+	Words  []dictionary.DictionaryWord
+	Notice string
 }
 
 // Service performs the full URL → analysis → storage pipeline.
@@ -245,7 +245,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 					"analysis_duration_ms", time.Since(start).Milliseconds(),
 				)
 			}
-			return &AnalyzeResult{Article: &AnalyzedArticle{Article: existing, Words: words}}, nil
+			return &AnalyzeResult{Article: &AnalyzedArticle{Stored: existing, Words: words}}, nil
 		}
 	}
 
@@ -547,7 +547,7 @@ func (s *Service) runAnalysis(ctx context.Context, userID int64, languageCode, u
 		)
 	}
 
-	return &AnalyzedArticle{Article: article, Words: storedWords, Notice: notice}, nil
+	return &AnalyzedArticle{Stored: article, Words: storedWords, Notice: notice}, nil
 }
 
 func progress(p ProgressFunc, s Stage) {

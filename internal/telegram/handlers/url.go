@@ -220,7 +220,7 @@ func (h *URLHandler) renderResult(ctx context.Context, b *bot.Bot, chatID int64,
 		ctx, b,
 		chatID, msgID,
 		loc, userID, userCEFR,
-		analyzed.Article, preview, len(analyzed.Words),
+		analyzed.Stored, preview, len(analyzed.Words),
 		view, analyzed.Notice, "url",
 	)
 }

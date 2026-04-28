@@ -268,7 +268,7 @@ func TestAnalyzeExtracted_TruncateModeAnalyzesPrefix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeExtracted: %v", err)
 	}
-	if analyzed.Article == nil || analyzed.Article.ID == 0 {
+	if analyzed.Stored == nil || analyzed.Stored.ID == 0 {
 		t.Fatalf("expected stored article, got %+v", analyzed)
 	}
 	if analyzed.Notice == "" {
@@ -329,7 +329,7 @@ func TestAnalyzeExtracted_SummarizeModeCallsLLMTwice(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeExtracted: %v", err)
 	}
-	if analyzed.Article == nil {
+	if analyzed.Stored == nil {
 		t.Fatalf("expected stored article")
 	}
 	if analyzed.Notice == "" {

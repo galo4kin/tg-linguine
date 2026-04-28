@@ -1,5 +1,8 @@
 # Releases
 
+## 42.5 — refactor-analyzed-article-naming
+Поле `AnalyzedArticle.Article` переименовано в `AnalyzedArticle.Stored`, чтобы убрать каскад `result.Article.Article.*`. Обновлены все потребители: `internal/articles/usecase.go`, `usecase_test.go`, `long_test.go`, `internal/telegram/handlers/url.go`, `long_article.go`. Сборка и тесты зелёные.
+
 ## 33 — admin-startup-ping
 При старте процесса админ (если `ADMIN_USER_ID` задан) получает в личку
 короткое сообщение «🍝 tg-linguine поднялся» с `version`, `commit` и

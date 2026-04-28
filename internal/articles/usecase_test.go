@@ -117,10 +117,10 @@ func TestAnalyzeArticle_HappyPath(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AnalyzeArticle: %v", err)
 	}
-	if result.Article == nil || result.Article.Article.ID == 0 || len(result.Article.Words) != 2 {
+	if result.Article == nil || result.Article.Stored.ID == 0 || len(result.Article.Words) != 2 {
 		t.Fatalf("unexpected: %+v", result)
 	}
-	if result.Article.Article.CategoryID == 0 {
+	if result.Article.Stored.CategoryID == 0 {
 		t.Fatalf("expected category linked")
 	}
 	if len(stages) != 3 {
@@ -277,8 +277,8 @@ func TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR(t *testing.T) {
 	if extractorCalls != 1 || len(llmStub.AnalyzeCalls) != 1 {
 		t.Fatalf("first: expected extractor=1 llm=1, got extractor=%d llm=%d", extractorCalls, len(llmStub.AnalyzeCalls))
 	}
-	if first.Article.Article.CEFRDetected != "B1" {
-		t.Fatalf("expected stored CEFR=B1 (matches active), got %q", first.Article.Article.CEFRDetected)
+	if first.Article.Stored.CEFRDetected != "B1" {
+		t.Fatalf("expected stored CEFR=B1 (matches active), got %q", first.Article.Stored.CEFRDetected)
 	}
 
 	// Same URL, second time. Even with different tracking params (utm_source) —
@@ -293,8 +293,8 @@ func TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR(t *testing.T) {
 	if len(llmStub.AnalyzeCalls) != 1 {
 		t.Fatalf("cache hit must not call llm; calls=%d", len(llmStub.AnalyzeCalls))
 	}
-	if second.Article.Article.ID != first.Article.Article.ID {
-		t.Fatalf("expected same article id, got %d vs %d", second.Article.Article.ID, first.Article.Article.ID)
+	if second.Article.Stored.ID != first.Article.Stored.ID {
+		t.Fatalf("expected same article id, got %d vs %d", second.Article.Stored.ID, first.Article.Stored.ID)
 	}
 	if len(second.Article.Words) != len(first.Article.Words) {
 		t.Fatalf("expected %d cached words, got %d", len(first.Article.Words), len(second.Article.Words))
@@ -372,8 +372,8 @@ func TestAnalyzeArticle_CacheHitOnCEFRChange(t *testing.T) {
 	if len(llmStub.AnalyzeCalls) != 0 {
 		t.Fatalf("cache hit must not invoke LLM Analyze; calls=%d", len(llmStub.AnalyzeCalls))
 	}
-	if result.Article.Article.ID != a.ID {
-		t.Fatalf("expected cached article id=%d, got %d", a.ID, result.Article.Article.ID)
+	if result.Article.Stored.ID != a.ID {
+		t.Fatalf("expected cached article id=%d, got %d", a.ID, result.Article.Stored.ID)
 	}
 }
 

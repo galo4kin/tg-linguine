@@ -111,7 +111,7 @@ func (h *LongArticleHandler) HandleCallback(ctx context.Context, b *bot.Bot, upd
 		ctx, b,
 		chatID, msgID,
 		loc, u.ID, userCEFR,
-		analyzed.Article, preview, len(analyzed.Words),
+		analyzed.Stored, preview, len(analyzed.Words),
 		view, analyzed.Notice, "long",
 	)
 }
