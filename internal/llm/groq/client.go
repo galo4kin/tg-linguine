@@ -6,11 +6,56 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/nikita/tg-linguine/internal/llm"
 )
+
+// maxRetryAfter caps the wait we'll accept from Groq's Retry-After signal.
+// Anything longer means we should bail out and tell the user to come back
+// later instead of pinning a Telegram handler goroutine for minutes.
+const maxRetryAfter = 60 * time.Second
+
+// retryAfterBodyRe pulls a "try again in N.NNs" hint out of Groq's 429
+// JSON body. Groq encodes the precise wait time there (their docs use the
+// same wording for all rate-limit messages), and it's more accurate than
+// the integer-seconds Retry-After header would be.
+var retryAfterBodyRe = regexp.MustCompile(`try again in (\d+(?:\.\d+)?)s`)
+
+// parseRateLimitRetryAfter extracts a Retry-After hint from an HTTP 429
+// response. It prefers the standard header (RFC 6585: delta-seconds or
+// HTTP-date) and falls back to scanning the response body for Groq's
+// "try again in N.NNs" wording. Returns zero when no usable hint is
+// present — callers treat that as "do not retry".
+func parseRateLimitRetryAfter(headers http.Header, body string) time.Duration {
+	if h := strings.TrimSpace(headers.Get("Retry-After")); h != "" {
+		if secs, err := strconv.ParseFloat(h, 64); err == nil && secs > 0 {
+			return clampRetryAfter(time.Duration(secs * float64(time.Second)))
+		}
+		if t, err := http.ParseTime(h); err == nil {
+			d := time.Until(t)
+			if d > 0 {
+				return clampRetryAfter(d)
+			}
+		}
+	}
+	if m := retryAfterBodyRe.FindStringSubmatch(body); len(m) == 2 {
+		if secs, err := strconv.ParseFloat(m[1], 64); err == nil && secs > 0 {
+			return clampRetryAfter(time.Duration(secs * float64(time.Second)))
+		}
+	}
+	return 0
+}
+
+func clampRetryAfter(d time.Duration) time.Duration {
+	if d > maxRetryAfter {
+		return maxRetryAfter
+	}
+	return d
+}
 
 const defaultBaseURL = "https://api.groq.com/openai/v1"
 

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"time"
 
 	"github.com/nikita/tg-linguine/internal/llm"
 )
@@ -118,6 +119,37 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		return nil, fmt.Errorf("groq: marshal request: %w", err)
 	}
 
+	for attempt := 0; attempt < 2; attempt++ {
+		raw, retryAfter, err := c.chatOnce(ctx, key, body)
+		if err == nil {
+			return raw, nil
+		}
+		// Only the first attempt is allowed to honor a Retry-After hint.
+		// If the second attempt also rate-limits, surface it to the user
+		// so the Telegram layer can edit the status to "rate limited".
+		if attempt == 0 && retryAfter > 0 {
+			if c.log != nil {
+				c.log.Info("groq.chat rate-limit retry",
+					"wait_ms", retryAfter.Milliseconds(),
+				)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(retryAfter):
+			}
+			continue
+		}
+		return nil, err
+	}
+	return nil, llm.ErrRateLimited
+}
+
+// chatOnce executes a single POST to /chat/completions. On a 2xx it returns
+// the assistant message bytes. On a non-2xx it returns a typed error and,
+// for 429s, the parsed Retry-After hint so chat() can decide whether to
+// wait and retry.
+func (c *Client) chatOnce(ctx context.Context, key string, body []byte) ([]byte, time.Duration, error) {
 	resp, retries, err := c.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
@@ -135,7 +167,7 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 				"err", err.Error(),
 			)
 		}
-		return nil, err
+		return nil, 0, err
 	}
 	defer func() {
 		io.Copy(io.Discard, resp.Body)
@@ -143,33 +175,33 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body := snapshotErrorBody(resp)
+		errBody := snapshotErrorBody(resp)
 		if c.log != nil {
 			c.log.Warn("groq.chat non-2xx",
 				"status", resp.StatusCode,
-				"body", body,
+				"body", errBody,
 				"errors_total", 1,
 			)
 		}
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return nil, llm.ErrInvalidAPIKey
+			return nil, 0, llm.ErrInvalidAPIKey
 		case resp.StatusCode == http.StatusTooManyRequests:
-			return nil, llm.ErrRateLimited
+			return nil, parseRateLimitRetryAfter(resp.Header, errBody), llm.ErrRateLimited
 		default:
-			return nil, fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, body)
+			return nil, 0, fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, errBody)
 		}
 	}
 
 	var parsed chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return nil, fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
+		return nil, 0, fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
+		return nil, 0, fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
 	}
 	if c.log != nil {
 		c.log.Info("groq.chat ok", "groq_retries", retries)
 	}
-	return []byte(parsed.Choices[0].Message.Content), nil
+	return []byte(parsed.Choices[0].Message.Content), 0, nil
 }

@@ -8,6 +8,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/nikita/tg-linguine/internal/llm"
 )
@@ -59,6 +60,30 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 		return "", fmt.Errorf("groq: marshal request: %w", err)
 	}
 
+	for attempt := 0; attempt < 2; attempt++ {
+		out, retryAfter, err := c.chatPlainTextOnce(ctx, key, body)
+		if err == nil {
+			return out, nil
+		}
+		if attempt == 0 && retryAfter > 0 {
+			if c.log != nil {
+				c.log.Info("groq.summarize rate-limit retry",
+					"wait_ms", retryAfter.Milliseconds(),
+				)
+			}
+			select {
+			case <-ctx.Done():
+				return "", ctx.Err()
+			case <-time.After(retryAfter):
+			}
+			continue
+		}
+		return "", err
+	}
+	return "", llm.ErrRateLimited
+}
+
+func (c *Client) chatPlainTextOnce(ctx context.Context, key string, body []byte) (string, time.Duration, error) {
 	resp, retries, err := c.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
@@ -76,7 +101,7 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 				"err", err.Error(),
 			)
 		}
-		return "", err
+		return "", 0, err
 	}
 	defer func() {
 		io.Copy(io.Discard, resp.Body)
@@ -84,33 +109,33 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 	}()
 
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		body := snapshotErrorBody(resp)
+		errBody := snapshotErrorBody(resp)
 		if c.log != nil {
 			c.log.Warn("groq.summarize non-2xx",
 				"status", resp.StatusCode,
-				"body", body,
+				"body", errBody,
 				"errors_total", 1,
 			)
 		}
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return "", llm.ErrInvalidAPIKey
+			return "", 0, llm.ErrInvalidAPIKey
 		case resp.StatusCode == http.StatusTooManyRequests:
-			return "", llm.ErrRateLimited
+			return "", parseRateLimitRetryAfter(resp.Header, errBody), llm.ErrRateLimited
 		default:
-			return "", fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, body)
+			return "", 0, fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, errBody)
 		}
 	}
 
 	var parsed chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
+		return "", 0, fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
+		return "", 0, fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
 	}
 	if c.log != nil {
 		c.log.Info("groq.summarize ok", "groq_retries", retries)
 	}
-	return parsed.Choices[0].Message.Content, nil
+	return parsed.Choices[0].Message.Content, 0, nil
 }
