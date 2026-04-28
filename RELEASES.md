@@ -1,5 +1,14 @@
 # Releases
 
+## 31 — admin-role
+Введён фундамент для админ-функций: `ADMIN_USER_ID` в
+`internal/config/config.go` (опциональный, default `0` = админ
+выключен), `telegram.IsAdmin(cfg, userID)` как единственный гейт
+(всегда `false` при `AdminUserID == 0`, защищено от подбора нулём).
+На старте `cmd/bot/main.go` пишет `admin configured user_id=…` или
+`admin disabled`. README пополнился разделом «Admin» с инструкцией
+по `@userinfobot`, `.env.example` — закомментированной строкой.
+
 ## 30 — readme-sync
 README приведён к фактическому коду: добавлены недостающие env
 (`GROQ_MODEL`, `RATE_LIMIT_PER_HOUR`, `MAX_TOKENS_PER_ARTICLE`,

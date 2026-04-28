@@ -33,6 +33,11 @@ func main() {
 
 	log := logger.New(cfg)
 	log.Info("boot", "version", version)
+	if cfg.AdminUserID == 0 {
+		log.Info("admin disabled")
+	} else {
+		log.Info("admin configured", "user_id", cfg.AdminUserID)
+	}
 
 	bundle, err := i18n.NewBundle()
 	if err != nil {

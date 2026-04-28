@@ -20,6 +20,10 @@ type Config struct {
 	LogStdout       bool   `env:"LOG_STDOUT"         envDefault:"false"`
 	RateLimitPerHour int   `env:"RATE_LIMIT_PER_HOUR" envDefault:"10"`
 	MaxTokensPerArticle int `env:"MAX_TOKENS_PER_ARTICLE" envDefault:"7000"`
+	// AdminUserID is the single Telegram user id allowed to invoke admin
+	// commands (and that receives the startup ping). Zero — the default —
+	// disables all admin functionality entirely.
+	AdminUserID int64 `env:"ADMIN_USER_ID" envDefault:"0"`
 }
 
 func Load() (*Config, error) {
