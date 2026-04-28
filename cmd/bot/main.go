@@ -67,6 +67,7 @@ func main() {
 			Timeout: time.Duration(cfg.HTTPTimeoutSec) * time.Second,
 		}),
 		groq.WithModel(cfg.GroqModel),
+		groq.WithLogger(log),
 	)
 
 	extractor := articles.NewReadabilityExtractor(
@@ -118,5 +119,13 @@ func main() {
 	defer cancel()
 
 	tgBot.Start(ctx)
+	// Once Start returns, ctx is canceled and the long-poll loop is gone.
+	// Drain any handler goroutines still finishing their work, capped so a
+	// stuck handler can't pin a SIGTERM exit forever.
+	if drained := tgBot.Shutdown(30 * time.Second); !drained {
+		log.Warn("shutdown: drain timeout exceeded; some handlers may not have finished",
+			"errors_total", 1,
+		)
+	}
 	log.Info("shutdown")
 }

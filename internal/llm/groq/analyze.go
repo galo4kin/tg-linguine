@@ -95,16 +95,24 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		return nil, fmt.Errorf("groq: marshal request: %w", err)
 	}
 
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+	resp, retries, err := c.doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("groq: build request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
 	if err != nil {
-		return nil, fmt.Errorf("groq: build request: %w", err)
-	}
-	req.Header.Set("Authorization", "Bearer "+key)
-	req.Header.Set("Content-Type", "application/json")
-
-	resp, err := c.http.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("%w: %v", llm.ErrUnavailable, err)
+		if c.log != nil {
+			c.log.Warn("groq.chat failed",
+				"groq_retries", retries,
+				"errors_total", 1,
+				"err", err.Error(),
+			)
+		}
+		return nil, err
 	}
 	defer func() {
 		io.Copy(io.Discard, resp.Body)
@@ -128,6 +136,9 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 	}
 	if len(parsed.Choices) == 0 {
 		return nil, errors.New("groq: empty choices")
+	}
+	if c.log != nil {
+		c.log.Info("groq.chat ok", "groq_retries", retries)
 	}
 	return []byte(parsed.Choices[0].Message.Content), nil
 }

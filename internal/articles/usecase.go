@@ -206,7 +206,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 					"user_id", userID,
 					"article_id", existing.ID,
 					"cache_hit", true,
-					"analysis_skipped_ms", time.Since(start).Milliseconds(),
+					"analysis_duration_ms", time.Since(start).Milliseconds(),
 				)
 			}
 			return &AnalyzedArticle{Article: existing, Words: words}, nil
@@ -351,8 +351,10 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 			"user_id", userID,
 			"article_id", article.ID,
 			"article_chars", len([]rune(extracted.Content)),
+			"tokens_estimated", tokensEstimated,
 			"words_count", len(storedWords),
-			"duration_ms", time.Since(start).Milliseconds(),
+			"cache_hit", false,
+			"analysis_duration_ms", time.Since(start).Milliseconds(),
 		)
 	}
 

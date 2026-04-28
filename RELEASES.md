@@ -1,5 +1,17 @@
 # Releases
 
+## 29 — hardening
+Прод-готовность: `recoverMiddleware` ловит панику любого хендлера,
+логирует stacktrace с `errors_total=1` и отвечает пользователю
+`error.generic`. Groq-клиент ретраит 5xx и сетевые ошибки 2 раза с
+паузами 1s/3s (4xx — без ретраев), новые тесты покрывают
+успех-после-ретраев, исчерпание ретраев и no-retry-on-401. Graceful
+shutdown через `Bot.Shutdown(30s)` поверх `sync.WaitGroup`-обёртки
+вокруг хендлеров. Лог-ключи приведены к спеке: `analysis_duration_ms`,
+`tokens_estimated`, `cache_hit`, `groq_retries`, `errors_total`.
+README пополнился разделами «Бэкап `bot.db`», «Graceful shutdown» и
+«Observability».
+
 ## 27.5 — refactor-estimate-tokens
 Дубль эвристики `runes/4` устранён: единственная реализация
 `EstimateTokens` живёт в `internal/llm`, а `articles.AnalyzeArticle`

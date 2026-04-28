@@ -90,6 +90,42 @@ Watchdog раз в минуту:
    `pgrep -f bin/tg-linguine` снова возвращает pid.
 3. `sudo reboot` → после загрузки в течение минуты бот снова в живых.
 
+### Бэкап `bot.db`
+
+База данных живёт в `~/Projects/tg-linguine/bot.db` (или по `DB_PATH`).
+Минимум — горячий онлайновый снапшот через sqlite3:
+
+```bash
+sqlite3 ~/Projects/tg-linguine/bot.db ".backup '/Volumes/Backup/bot-$(date +%F).db'"
+```
+
+`.backup` — атомарный, безопасен поверх работающего бота. Кладите в
+ежедневный cron на отдельный диск/облако, ротируйте по дате.
+`ENCRYPTION_KEY` бэкапится отдельно — без него зашифрованные API-ключи
+из БД восстановить нельзя.
+
+### Graceful shutdown
+
+При `SIGTERM` (через `kill` без `-9`, `launchctl unload`, или просто
+рестарт mac mini) бот останавливает long-poll, дожидает текущие
+обработчики до 30s и выходит. Если за 30s обработчики не успели —
+лог содержит `shutdown: drain timeout exceeded` и процесс выходит
+принудительно (новый процесс поднимет watchdog).
+
+### Observability
+
+Логи бота — структурированный JSON через `slog` + ротация
+`lumberjack`. Полезные ключи для grep:
+
+- `analysis_duration_ms`, `tokens_estimated`, `article_chars`,
+  `cache_hit` — каждый успешный/закешированный анализ;
+- `groq_retries` — сколько раз ретраили Groq на 5xx;
+- `errors_total` — фиксируется на каждой error-записи (panic в
+  хендлере, сбой шатдауна, провал groq-запроса).
+
+Ничего из этого никуда не отправляется по сети — для дашборда натравите
+log-scraper (Promtail/Vector/Loki) на `bot.log`.
+
 ## Master-ключ шифрования (`ENCRYPTION_KEY`)
 
 API-ключи пользователей (Groq и т.п.) хранятся в БД зашифрованными

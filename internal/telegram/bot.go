@@ -4,6 +4,8 @@ import (
 	"context"
 	"database/sql"
 	"log/slog"
+	"runtime/debug"
+	"sync"
 	"time"
 
 	"github.com/go-telegram/bot"
@@ -29,6 +31,10 @@ type Bot struct {
 	b      *bot.Bot
 	log    *slog.Logger
 	bundle *goi18n.Bundle
+	// inflight tracks handlers currently running so Shutdown can drain them
+	// gracefully on SIGTERM. The recover/wait middleware Add()s before
+	// dispatch and Done()s in defer.
+	inflight sync.WaitGroup
 }
 
 type Deps struct {
@@ -48,7 +54,10 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	tb := &Bot{log: log, bundle: deps.Bundle}
 
 	opts := []bot.Option{
-		bot.WithMiddlewares(tb.i18nMiddleware, tb.logMiddleware),
+		// Order matters: track-inflight first so Shutdown sees the work; then
+		// recover so panics are caught before they unwind through the bot
+		// loop; then i18n/log so handlers run with localizer in context.
+		bot.WithMiddlewares(tb.trackInflightMiddleware, tb.recoverMiddleware, tb.i18nMiddleware, tb.logMiddleware),
 	}
 
 	b, err := bot.New(cfg.BotToken, opts...)
@@ -128,6 +137,82 @@ func matchAPIKeyText(w *session.APIKeyWaiter) func(*models.Update) bool {
 
 func (tb *Bot) Start(ctx context.Context) {
 	tb.b.Start(ctx)
+}
+
+// Shutdown waits for in-flight handlers to finish, capped at `timeout`.
+// Returns true if everything drained cleanly, false if the timeout fired
+// (callers may still exit — handlers will continue best-effort, but the
+// process is on its way out).
+func (tb *Bot) Shutdown(timeout time.Duration) bool {
+	done := make(chan struct{})
+	go func() {
+		tb.inflight.Wait()
+		close(done)
+	}()
+	select {
+	case <-done:
+		return true
+	case <-time.After(timeout):
+		return false
+	}
+}
+
+func (tb *Bot) trackInflightMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		tb.inflight.Add(1)
+		defer tb.inflight.Done()
+		next(ctx, b, update)
+	}
+}
+
+// recoverMiddleware turns a panic in any handler into a localized "something
+// went wrong" reply, so a single buggy code path never tears down the bot.
+// The full stack is logged at error level with errors_total=1 for log-based
+// alerting.
+func (tb *Bot) recoverMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
+	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
+		defer func() {
+			r := recover()
+			if r == nil {
+				return
+			}
+			tb.log.Error("handler panic recovered",
+				"errors_total", 1,
+				"panic", r,
+				"stack", string(debug.Stack()),
+			)
+			loc := tgi18n.For(tb.bundle, langFromUpdate(update))
+			msg := tgi18n.T(loc, "error.generic", nil)
+			if chatID := chatIDFromUpdate(update); chatID != 0 {
+				_, _ = b.SendMessage(ctx, &bot.SendMessageParams{ChatID: chatID, Text: msg})
+			}
+		}()
+		next(ctx, b, update)
+	}
+}
+
+func langFromUpdate(u *models.Update) string {
+	switch {
+	case u == nil:
+		return "en"
+	case u.Message != nil && u.Message.From != nil:
+		return u.Message.From.LanguageCode
+	case u.CallbackQuery != nil:
+		return u.CallbackQuery.From.LanguageCode
+	}
+	return "en"
+}
+
+func chatIDFromUpdate(u *models.Update) int64 {
+	switch {
+	case u == nil:
+		return 0
+	case u.Message != nil:
+		return u.Message.Chat.ID
+	case u.CallbackQuery != nil && u.CallbackQuery.Message.Message != nil:
+		return u.CallbackQuery.Message.Message.Chat.ID
+	}
+	return 0
 }
 
 func (tb *Bot) i18nMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
