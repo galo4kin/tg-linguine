@@ -76,6 +76,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 
 	urlLimiter := NewURLRateLimiter(cfg.RateLimitPerHour, time.Hour)
 	urlH := handlers.NewURL(deps.Users, deps.Languages, deps.Articles, deps.ArticleRepo, deps.ArticleWords, deps.DB, urlLimiter, deps.Bundle, log)
+	longH := handlers.NewLongArticle(deps.Users, deps.Languages, deps.Articles, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
 	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	historyH := handlers.NewHistory(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
@@ -113,6 +114,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixMyWords, bot.MatchTypePrefix, myWordsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixStudy, bot.MatchTypePrefix, studyH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixDelete, bot.MatchTypePrefix, deleteH.HandleCallback)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixLongArticle, bot.MatchTypePrefix, longH.HandleCallback)
 
 	tb.b = b
 	return tb, nil

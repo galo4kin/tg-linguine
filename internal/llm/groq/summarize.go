@@ -1,0 +1,100 @@
+package groq
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"fmt"
+	"io"
+	"net/http"
+	"strings"
+
+	"github.com/nikita/tg-linguine/internal/llm"
+)
+
+// Summarize asks Groq to compress a long article down to roughly the
+// target token count. The response is plain text (no JSON / no schema), in
+// the article's original language. Used by the long-article pre-summary
+// fallback in articles.Service.AnalyzeExtracted.
+func (c *Client) Summarize(ctx context.Context, key string, req llm.SummarizeRequest) (string, error) {
+	model := c.model
+	if model == "" {
+		model = DefaultModel
+	}
+
+	userPrompt, err := llm.RenderSummarizeUserPrompt(req)
+	if err != nil {
+		return "", err
+	}
+
+	messages := []chatMessage{
+		{Role: "system", Content: llm.SummarizeSystemPrompt()},
+		{Role: "user", Content: userPrompt},
+	}
+
+	body, err := c.chatPlainText(ctx, key, model, messages)
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(body), nil
+}
+
+// chatPlainText is the prose-output sibling of chat. It omits the
+// response_format=json_object hint so the model is free to return plain
+// text. Retry / status mapping is identical.
+func (c *Client) chatPlainText(ctx context.Context, key, model string, messages []chatMessage) (string, error) {
+	body, err := json.Marshal(struct {
+		Model    string        `json:"model"`
+		Messages []chatMessage `json:"messages"`
+	}{Model: model, Messages: messages})
+	if err != nil {
+		return "", fmt.Errorf("groq: marshal request: %w", err)
+	}
+
+	resp, retries, err := c.doWithRetry(ctx, func() (*http.Request, error) {
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
+		if err != nil {
+			return nil, fmt.Errorf("groq: build request: %w", err)
+		}
+		req.Header.Set("Authorization", "Bearer "+key)
+		req.Header.Set("Content-Type", "application/json")
+		return req, nil
+	})
+	if err != nil {
+		if c.log != nil {
+			c.log.Warn("groq.summarize failed",
+				"groq_retries", retries,
+				"errors_total", 1,
+				"err", err.Error(),
+			)
+		}
+		return "", err
+	}
+	defer func() {
+		io.Copy(io.Discard, resp.Body)
+		resp.Body.Close()
+	}()
+
+	switch {
+	case resp.StatusCode >= 200 && resp.StatusCode < 300:
+		// fall through
+	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+		return "", llm.ErrInvalidAPIKey
+	case resp.StatusCode == http.StatusTooManyRequests:
+		return "", llm.ErrRateLimited
+	default:
+		return "", fmt.Errorf("%w: status %d", llm.ErrUnavailable, resp.StatusCode)
+	}
+
+	var parsed chatResponse
+	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
+		return "", fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
+	}
+	if len(parsed.Choices) == 0 {
+		return "", fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
+	}
+	if c.log != nil {
+		c.log.Info("groq.summarize ok", "groq_retries", retries)
+	}
+	return parsed.Choices[0].Message.Content, nil
+}

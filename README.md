@@ -42,10 +42,10 @@ make run
 | `LOG_MAX_AGE_DAYS` | `30` | Максимальный возраст ротированного файла |
 | `LOG_STDOUT` | `false` | Дублировать ли логи в stdout (удобно в dev) |
 | `HTTP_TIMEOUT_SEC` | `20` | Таймаут HTTP — общий для extractor'а и Groq-клиента |
-| `MAX_ARTICLE_SIZE_KB` | `512` | Лимит размера скачанной страницы для readability-extractor |
-| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Имя модели в чат-комплишн вызовах Groq |
+| `MAX_ARTICLE_SIZE_KB` | `4096` | Лимит размера скачанной страницы для readability-extractor (Wikipedia featured articles бывают 1–3 MB сырого HTML) |
+| `GROQ_MODEL` | `llama-3.3-70b-versatile` | Имя модели в чат-комплишн вызовах Groq (контекст 128K) |
 | `RATE_LIMIT_PER_HOUR` | `10` | Лимит обрабатываемых URL на пользователя в час |
-| `MAX_TOKENS_PER_ARTICLE` | `7000` | Гейт по эвристике `runes/4` — статьи длиннее отбиваются ДО вызова LLM, чтобы не сжигать токены |
+| `MAX_TOKENS_PER_ARTICLE` | `30000` | Гейт по эвристике `runes/4`. Если статья длиннее — бот предлагает выбрать: разобрать первую часть (truncation) или сжать перед разбором (LLM pre-summary). |
 | `ADMIN_USER_ID` | `0` | Telegram-id админа (см. раздел «Admin»). `0` = админ-функции выключены |
 
 ## Make-цели

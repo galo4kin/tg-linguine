@@ -36,6 +36,12 @@ type URLHandler struct {
 	log       *slog.Logger
 }
 
+// CallbackPrefixLongArticle drives the user's choice between the two
+// long-article fallback strategies. Payload shape: `lng:<id>:<variant>`
+// with variant ∈ {t, s} for truncate / summarize. The id is a short
+// random key allocated by articles.PendingStore.
+const CallbackPrefixLongArticle = "lng:"
+
 // URLRateLimiter is the small surface the URL handler needs from the
 // transport-level limiter. Defining the interface here keeps the handler
 // package free of any cross-package dependency on the limiter
@@ -143,13 +149,6 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 	result, err := h.articles.AnalyzeArticle(ctx, u.ID, url, progress)
 	if err != nil {
 		h.log.Warn("url: analyze failed", "user_id", u.ID, "err", err)
-		var tooLong *articles.TooLongError
-		if errors.As(err, &tooLong) {
-			editStatus(tgi18n.T(loc, "article.err.too_long", map[string]int{
-				"Words": tooLong.Words,
-			}))
-			return
-		}
 		editStatus(tgi18n.T(loc, articleErrorMessageID(err), nil))
 		return
 	}
@@ -158,26 +157,71 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 		return
 	}
 
-	preview := make([]string, 0, len(result.Words))
-	for _, w := range result.Words {
+	if result.LongPending != nil {
+		h.editLongArticlePrompt(ctx, b, msg.Chat.ID, statusMsg.ID, loc, result.LongPending)
+		return
+	}
+
+	h.renderResult(ctx, b, msg.Chat.ID, statusMsg.ID, loc, u.ID, result.Article)
+}
+
+// editLongArticlePrompt overwrites the status message with a localized
+// "this article is long, what should I do?" question and two inline-keyboard
+// buttons (truncate / summarize).
+func (h *URLHandler) editLongArticlePrompt(ctx context.Context, b *bot.Bot, chatID int64, msgID int, loc *goi18n.Localizer, lp *articles.LongPending) {
+	text := tgi18n.T(loc, "article.long.prompt", map[string]int{"Words": lp.Words})
+	kb := &models.InlineKeyboardMarkup{
+		InlineKeyboard: [][]models.InlineKeyboardButton{
+			{
+				{
+					Text:         tgi18n.T(loc, "article.long.btn.truncate", nil),
+					CallbackData: CallbackPrefixLongArticle + lp.PendingID + ":t",
+				},
+			},
+			{
+				{
+					Text:         tgi18n.T(loc, "article.long.btn.summarize", nil),
+					CallbackData: CallbackPrefixLongArticle + lp.PendingID + ":s",
+				},
+			},
+		},
+	}
+	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   msgID,
+		Text:        text,
+		ReplyMarkup: kb,
+	}); err != nil {
+		h.log.Debug("url: long prompt edit", "err", err)
+	}
+}
+
+// renderResult is the shared "render an analyzed article into the message"
+// step used both by the short-article path (returned directly from
+// AnalyzeArticle) and the long-article callback path (returned from
+// AnalyzeExtracted). It looks up the user's CEFR and dispatches to the
+// shared cardRenderer.
+func (h *URLHandler) renderResult(ctx context.Context, b *bot.Bot, chatID int64, msgID int, loc *goi18n.Localizer, userID int64, analyzed *articles.AnalyzedArticle) {
+	preview := make([]string, 0, len(analyzed.Words))
+	for _, w := range analyzed.Words {
 		preview = append(preview, w.Lemma)
 	}
 	view := DefaultCardView()
 
 	userCEFR := ""
-	if active, err := h.languages.Active(ctx, u.ID); err == nil && active != nil {
+	if active, err := h.languages.Active(ctx, userID); err == nil && active != nil {
 		userCEFR = active.CEFRLevel
 	}
 
 	// Cache hit on a previously analyzed URL may not yet have the user's
 	// current CEFR adaptation if the user changed level between analyses;
 	// the renderer regenerates lazily so the card lands fully populated.
-	h.render.renderInline(
+	h.render.renderInlineWithNotice(
 		ctx, b,
-		msg.Chat.ID, statusMsg.ID,
-		loc, u.ID, userCEFR,
-		result.Article, preview, len(result.Words),
-		view, "url",
+		chatID, msgID,
+		loc, userID, userCEFR,
+		analyzed.Article, preview, len(analyzed.Words),
+		view, analyzed.Notice, "url",
 	)
 }
 
@@ -210,6 +254,8 @@ func articleErrorMessageID(err error) string {
 		return "article.err.not_article"
 	case errors.Is(err, articles.ErrPaywall):
 		return "article.err.paywall"
+	case errors.Is(err, articles.ErrPendingExpired):
+		return "article.long.expired"
 	case errors.Is(err, articles.ErrBlockedSource):
 		return "article.err.blocked_source"
 	case errors.Is(err, articles.ErrBlockedContent):

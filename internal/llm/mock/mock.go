@@ -33,6 +33,12 @@ type Provider struct {
 	AdaptResp llm.AdaptResponse
 	AdaptErr  error
 
+	// SummarizeResp / SummarizeErr drive the long-article pre-summary
+	// fallback. The default empty string is fine for tests that never hit
+	// the summarize path.
+	SummarizeResp string
+	SummarizeErr  error
+
 	// ValidateErr is returned by ValidateAPIKey. Nil means the key is
 	// accepted as valid.
 	ValidateErr error
@@ -40,8 +46,9 @@ type Provider struct {
 	// Calls records every invocation in order so tests can assert on the
 	// fields the article pipeline forwarded (KnownWords, target language,
 	// etc.) without exposing the underlying loop.
-	AnalyzeCalls []llm.AnalyzeRequest
-	AdaptCalls   []llm.AdaptRequest
+	AnalyzeCalls   []llm.AnalyzeRequest
+	AdaptCalls     []llm.AdaptRequest
+	SummarizeCalls []llm.SummarizeRequest
 }
 
 // LoadAnalyze reads `fixtures/<name>.json`, validates it against the live
@@ -114,6 +121,14 @@ func (p *Provider) Adapt(ctx context.Context, key string, req llm.AdaptRequest) 
 		return llm.AdaptResponse{}, p.AdaptErr
 	}
 	return p.AdaptResp, nil
+}
+
+func (p *Provider) Summarize(ctx context.Context, key string, req llm.SummarizeRequest) (string, error) {
+	p.SummarizeCalls = append(p.SummarizeCalls, req)
+	if p.SummarizeErr != nil {
+		return "", p.SummarizeErr
+	}
+	return p.SummarizeResp, nil
 }
 
 // Compile-time guarantee that Provider satisfies the llm.Provider contract.

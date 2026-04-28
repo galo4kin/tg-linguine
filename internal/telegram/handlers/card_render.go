@@ -63,11 +63,31 @@ func (r *cardRenderer) renderInline(
 	view ArticleView,
 	logPrefix string,
 ) {
+	r.renderInlineWithNotice(ctx, b, chatID, msgID, loc, userID, userCEFR, article, preview, totalWords, view, "", logPrefix)
+}
+
+// renderInlineWithNotice is the renderInline variant used by the
+// long-article fallback paths. The notice string (when non-empty) is
+// prepended to the card text as a single-line banner so the user sees that
+// the analysis ran on a transformed body.
+func (r *cardRenderer) renderInlineWithNotice(
+	ctx context.Context,
+	b *bot.Bot,
+	chatID any, msgID int,
+	loc *goi18n.Localizer,
+	userID int64, userCEFR string,
+	article *articles.Article,
+	preview []string,
+	totalWords int,
+	view ArticleView,
+	notice string,
+	logPrefix string,
+) {
 	article, ok := r.ensureAdapted(ctx, b, chatID, msgID, loc, userID, userCEFR, article, view, logPrefix)
 	if !ok {
 		return
 	}
-	r.editCard(ctx, b, chatID, msgID, loc, article, userCEFR, preview, totalWords, view, logPrefix)
+	r.editCardWithNotice(ctx, b, chatID, msgID, loc, article, userCEFR, preview, totalWords, view, notice, logPrefix)
 }
 
 // openByID is the repo-backed variant: it loads the article, checks
@@ -183,7 +203,26 @@ func (r *cardRenderer) editCard(
 	view ArticleView,
 	logPrefix string,
 ) {
+	r.editCardWithNotice(ctx, b, chatID, msgID, loc, article, userCEFR, preview, totalWords, view, "", logPrefix)
+}
+
+func (r *cardRenderer) editCardWithNotice(
+	ctx context.Context,
+	b *bot.Bot,
+	chatID any, msgID int,
+	loc *goi18n.Localizer,
+	article *articles.Article,
+	userCEFR string,
+	preview []string,
+	totalWords int,
+	view ArticleView,
+	notice string,
+	logPrefix string,
+) {
 	text := renderArticleCard(loc, article, userCEFR, preview, totalWords, view)
+	if notice != "" {
+		text = notice + "\n\n" + text
+	}
 	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      chatID,
 		MessageID:   msgID,

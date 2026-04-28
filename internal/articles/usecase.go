@@ -19,35 +19,57 @@ var (
 	ErrNoAPIKey         = errors.New("articles: user has no api key")
 	ErrNoSourceText     = errors.New("articles: no adapted text to use as regen source")
 	ErrUnknownCEFR      = errors.New("articles: unknown cefr level")
-	// ErrTooLong is raised when the extracted article exceeds the configured
-	// per-article token budget. The check fires BEFORE the LLM is called, so
-	// the user pays nothing for an article we cannot reasonably analyze.
-	// Returned wrapped in a *TooLongError so callers can read the estimated
-	// word count for a friendlier rejection message.
-	ErrTooLong = errors.New("articles: article exceeds token budget")
+	// ErrPendingExpired is raised by AnalyzeExtracted when the supplied
+	// PendingID is unknown — either the TTL fired or the same id was
+	// already consumed by a previous click. The Telegram layer maps this
+	// to a friendly "session expired, resend the link" message.
+	ErrPendingExpired = errors.New("articles: pending session expired")
 )
 
-// TooLongError carries the estimated counts behind ErrTooLong so the
-// Telegram layer can render a localized "~N words" hint without re-walking
-// the article body. Use errors.As(err, &t) to retrieve.
-type TooLongError struct {
-	Tokens int
-	Words  int
-	Limit  int
-}
-
-func (e *TooLongError) Error() string {
-	return fmt.Sprintf("articles: too long: tokens=%d words=%d limit=%d", e.Tokens, e.Words, e.Limit)
-}
-
-func (e *TooLongError) Is(target error) bool {
-	return target == ErrTooLong
-}
-
 // DefaultMaxTokensPerArticle is the fallback used when ServiceDeps.MaxTokens
-// is left at zero. 7000 leaves room for the prompt scaffolding within an
-// 8k-context model — see _10_todo/26-long-articles.md.
-const DefaultMaxTokensPerArticle = 7000
+// is left at zero. 30000 fits well within the 128K context of
+// llama-3.3-70b-versatile while leaving headroom for prompts, the JSON
+// response, and three CEFR-level adapted versions.
+const DefaultMaxTokensPerArticle = 30000
+
+// summarizeInputBudget caps the tokens we feed into the pre-summary call
+// itself. Even a 128K-context model degrades on extremely long inputs; this
+// keeps the summarize prompt comfortably under that ceiling.
+const summarizeInputBudget = 100000
+
+// LongAnalysisMode is selected by the user when an article exceeds the
+// per-request token budget. Both modes always produce a stored article;
+// they differ only in how the extracted text is shaped before analysis.
+type LongAnalysisMode int
+
+const (
+	// ModeTruncate keeps the first paragraphs of the article up to the
+	// budget. Cheapest variant — one LLM call, identical to the normal
+	// flow but on a paragraph-cut prefix.
+	ModeTruncate LongAnalysisMode = iota + 1
+	// ModeSummarize asks the LLM to compress the article (in the original
+	// language) so that nothing is dropped wholesale, then runs the normal
+	// analysis on the summary. Two LLM calls.
+	ModeSummarize
+)
+
+// LongPending describes a parked article that exceeded the token budget
+// during AnalyzeArticle. The Telegram layer renders a prompt with two
+// inline-keyboard buttons whose callback_data carries the PendingID.
+type LongPending struct {
+	PendingID string
+	Tokens    int
+	Words     int
+	Limit     int
+}
+
+// AnalyzeResult is the structured return of AnalyzeArticle. Exactly one of
+// {Article, LongPending} is non-nil on a successful return; an error means
+// neither is meaningful.
+type AnalyzeResult struct {
+	Article     *AnalyzedArticle
+	LongPending *LongPending
+}
 
 // ApproxWordCount is purely for the user-facing rejection message — we tell
 // the user how many words their article is so they have a sense of how much
@@ -86,9 +108,15 @@ type ProgressFunc func(Stage)
 // AnalyzedArticle bundles the freshly stored Article with the words that were
 // recorded for it (in the same order the LLM emitted), so the caller can
 // render the article card without an extra DB round-trip.
+//
+// Notice is non-empty when the analysis ran on a transformed body
+// (paragraph-truncated or LLM-pre-summarized) so the renderer can prepend
+// a single-line banner above the card. Empty for normal full-article
+// analyses and for cache replays.
 type AnalyzedArticle struct {
 	Article *Article
 	Words   []dictionary.DictionaryWord
+	Notice  string
 }
 
 // Service performs the full URL → analysis → storage pipeline.
@@ -105,6 +133,7 @@ type Service struct {
 	statuses  dictionary.UserWordStatusRepository
 	maxTokens int
 	blocklist *Blocklist
+	pending   *PendingStore
 	log       *slog.Logger
 }
 
@@ -139,14 +168,22 @@ func NewService(d ServiceDeps) *Service {
 		articles: d.Articles, dict: d.Dictionary, awords: d.ArticleWords, statuses: d.Statuses,
 		maxTokens: maxTokens,
 		blocklist: d.Blocklist,
+		pending:   NewPendingStore(0),
 		log:       d.Log,
 	}
 }
 
+
 // AnalyzeArticle resolves the user's active language and Groq API key, fetches
 // and analyzes the article, then atomically writes the article + words +
 // dictionary entries. Progress is reported through onProgress (may be nil).
-func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, onProgress ProgressFunc) (*AnalyzedArticle, error) {
+//
+// When the extracted body exceeds the per-article token budget, the article
+// is parked in the in-memory pending store and the function returns an
+// AnalyzeResult whose LongPending is non-nil. The Telegram layer presents
+// the user with a choice (truncate vs pre-summary) and re-enters via
+// AnalyzeExtracted.
+func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, onProgress ProgressFunc) (*AnalyzeResult, error) {
 	start := time.Now()
 
 	active, err := s.languages.Active(ctx, userID)
@@ -157,13 +194,11 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		return nil, fmt.Errorf("active language: %w", err)
 	}
 
-	user, err := s.users.ByID(ctx, userID)
-	if err != nil {
+	if _, err := s.users.ByID(ctx, userID); err != nil {
 		return nil, fmt.Errorf("load user: %w", err)
 	}
 
-	key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
-	if err != nil {
+	if _, err := s.keys.Get(ctx, userID, users.ProviderGroq); err != nil {
 		if errors.Is(err, users.ErrNotFound) {
 			return nil, ErrNoAPIKey
 		}
@@ -209,7 +244,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 					"analysis_duration_ms", time.Since(start).Milliseconds(),
 				)
 			}
-			return &AnalyzedArticle{Article: existing, Words: words}, nil
+			return &AnalyzeResult{Article: &AnalyzedArticle{Article: existing, Words: words}}, nil
 		}
 	}
 
@@ -219,35 +254,182 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		return nil, err
 	}
 
-	// Token-budget gate: bail out before spending Groq tokens on something
-	// the model cannot fit anyway. The boundary case (estimate == limit) is
-	// allowed — only strictly-greater values are rejected.
+	// Token-budget gate: when the extracted body cannot fit, park it and let
+	// the caller present a choice. We never reject outright — every link the
+	// user sends should yield a usable analysis, possibly on a transformed
+	// version of the text.
 	tokensEstimated := llm.EstimateTokens(extracted.Content)
 	if tokensEstimated > s.maxTokens {
 		words := ApproxWordCount(extracted.Content)
+		pendingID := s.pending.Put(userID, extracted)
 		if s.log != nil {
-			s.log.Info("article rejected: too long",
+			s.log.Info("article parked: too long",
 				"user_id", userID,
 				"url", url,
 				"tokens_estimated", tokensEstimated,
 				"tokens_limit", s.maxTokens,
 				"words_estimated", words,
-				"reason", "exceeds_token_budget",
+				"pending_id", pendingID,
 			)
 		}
-		return nil, &TooLongError{Tokens: tokensEstimated, Words: words, Limit: s.maxTokens}
+		return &AnalyzeResult{LongPending: &LongPending{
+			PendingID: pendingID,
+			Tokens:    tokensEstimated,
+			Words:     words,
+			Limit:     s.maxTokens,
+		}}, nil
 	}
 
-	knownLemmas, err := s.statuses.KnownLemmas(ctx, s.db, userID, active.LanguageCode)
+	analyzed, err := s.runAnalysis(ctx, userID, active.LanguageCode, active.CEFRLevel, extracted, "", onProgress, start, tokensEstimated)
+	if err != nil {
+		return nil, err
+	}
+	return &AnalyzeResult{Article: analyzed}, nil
+}
+
+// AnalyzeExtracted resumes a parked long-article session: it pops the
+// extracted body from the pending store, transforms it according to mode
+// (truncate or LLM pre-summary), and runs the standard analysis pipeline
+// against the transformed body. The returned AnalyzedArticle carries a
+// localized banner string in Notice.
+//
+// noticeRenderer maps a NoticeKind into a localized one-line string; the
+// Telegram layer plugs in its i18n bundle. Passing nil yields an empty
+// notice — useful for tests that don't care about the user-facing wording.
+type NoticeKind int
+
+const (
+	NoticeTruncated NoticeKind = iota + 1
+	NoticeSummarized
+)
+
+// NoticeData carries the numbers that go into the localized banner.
+type NoticeData struct {
+	Kind       NoticeKind
+	Percent    int
+	Words      int
+	TotalWords int
+}
+
+// NoticeRenderer is implemented by the Telegram layer to render a localized
+// banner string from NoticeData. Passing nil to AnalyzeExtracted yields an
+// empty notice.
+type NoticeRenderer interface {
+	RenderNotice(NoticeData) string
+}
+
+func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID string, mode LongAnalysisMode, notice NoticeRenderer, onProgress ProgressFunc) (*AnalyzedArticle, error) {
+	start := time.Now()
+
+	extracted, ok := s.pending.Take(pendingID, userID)
+	if !ok {
+		return nil, ErrPendingExpired
+	}
+
+	active, err := s.languages.Active(ctx, userID)
+	if err != nil {
+		if errors.Is(err, users.ErrNotFound) {
+			return nil, ErrNoActiveLanguage
+		}
+		return nil, fmt.Errorf("active language: %w", err)
+	}
+
+	totalWords := ApproxWordCount(extracted.Content)
+	transformed := extracted
+	noticeText := ""
+
+	switch mode {
+	case ModeTruncate:
+		body, percent := TruncateAtParagraph(extracted.Content, s.maxTokens)
+		transformed.Content = body
+		if notice != nil {
+			noticeText = notice.RenderNotice(NoticeData{
+				Kind:       NoticeTruncated,
+				Percent:    percent,
+				Words:      ApproxWordCount(body),
+				TotalWords: totalWords,
+			})
+		}
+		if s.log != nil {
+			s.log.Info("article truncated",
+				"user_id", userID,
+				"pending_id", pendingID,
+				"percent_kept", percent,
+			)
+		}
+	case ModeSummarize:
+		// Pre-summary needs the API key here so we can send the compress
+		// call before reaching runAnalysis.
+		key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
+		if err != nil {
+			if errors.Is(err, users.ErrNotFound) {
+				return nil, ErrNoAPIKey
+			}
+			return nil, fmt.Errorf("api key: %w", err)
+		}
+		// Cap the input to the summarize call so an outlier-sized article
+		// does not blow past the model's context window on the way in.
+		summarizeIn, _ := TruncateAtParagraph(extracted.Content, summarizeInputBudget)
+		summary, err := s.llm.Summarize(ctx, key, llm.SummarizeRequest{
+			TargetLanguage: active.LanguageCode,
+			ArticleTitle:   extracted.Title,
+			ArticleText:    summarizeIn,
+			TargetTokens:   s.maxTokens - 1000,
+		})
+		if err != nil {
+			return nil, err
+		}
+		// Belt-and-braces: even after summarization, paragraph-truncate to
+		// the budget so a verbose summary cannot trip the analysis cap.
+		body, _ := TruncateAtParagraph(summary, s.maxTokens)
+		transformed.Content = body
+		if notice != nil {
+			noticeText = notice.RenderNotice(NoticeData{
+				Kind:       NoticeSummarized,
+				TotalWords: totalWords,
+			})
+		}
+		if s.log != nil {
+			s.log.Info("article summarized",
+				"user_id", userID,
+				"pending_id", pendingID,
+				"orig_words", totalWords,
+				"summary_chars", len([]rune(body)),
+			)
+		}
+	default:
+		return nil, fmt.Errorf("articles: unknown long-analysis mode %d", mode)
+	}
+
+	tokens := llm.EstimateTokens(transformed.Content)
+	return s.runAnalysis(ctx, userID, active.LanguageCode, active.CEFRLevel, transformed, noticeText, onProgress, start, tokens)
+}
+
+// runAnalysis is the shared back half of the URL pipeline used by both the
+// normal AnalyzeArticle path and the AnalyzeExtracted (truncate/summarize)
+// path. It calls the LLM, persists the result, and returns the freshly-stored
+// article. Caller has already checked language/api-key/blocklist/cache and
+// trimmed the body to the budget.
+func (s *Service) runAnalysis(ctx context.Context, userID int64, languageCode, userCEFR string, extracted Extracted, notice string, onProgress ProgressFunc, start time.Time, tokensEstimated int) (*AnalyzedArticle, error) {
+	user, err := s.users.ByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("load user: %w", err)
+	}
+	key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
+	if err != nil {
+		return nil, fmt.Errorf("api key: %w", err)
+	}
+
+	knownLemmas, err := s.statuses.KnownLemmas(ctx, s.db, userID, languageCode)
 	if err != nil {
 		return nil, fmt.Errorf("known lemmas: %w", err)
 	}
 
 	progress(onProgress, StageAnalyzing)
 	resp, err := s.llm.Analyze(ctx, key, llm.AnalyzeRequest{
-		TargetLanguage: active.LanguageCode,
+		TargetLanguage: languageCode,
 		NativeLanguage: user.InterfaceLanguage,
-		CEFR:           active.CEFRLevel,
+		CEFR:           userCEFR,
 		KnownWords:     knownLemmas,
 		ArticleTitle:   extracted.Title,
 		ArticleText:    extracted.Content,
@@ -264,7 +446,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		if s.log != nil {
 			s.log.Info("article rejected: safety flags",
 				"user_id", userID,
-				"url", url,
+				"url", extracted.URL,
 				"safety_flags", resp.SafetyFlags,
 				"persisted", false,
 				"reason", "llm_safety_flagged",
@@ -275,7 +457,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 
 	progress(onProgress, StagePersisting)
 
-	adapted, err := json.Marshal(adaptedFromLLM(active.CEFRLevel, resp.AdaptedVersions))
+	adapted, err := json.Marshal(adaptedFromLLM(userCEFR, resp.AdaptedVersions))
 	if err != nil {
 		return nil, fmt.Errorf("marshal adapted: %w", err)
 	}
@@ -285,7 +467,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		SourceURL:       extracted.URL,
 		SourceURLHash:   extracted.URLHash,
 		Title:           extracted.Title,
-		LanguageCode:    active.LanguageCode,
+		LanguageCode:    languageCode,
 		CEFRDetected:    resp.CEFRDetected,
 		SummaryTarget:   resp.SummaryTarget,
 		SummaryNative:   resp.SummaryNative,
@@ -311,7 +493,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		}
 		for _, w := range resp.Words {
 			dw := dictionary.DictionaryWord{
-				LanguageCode:     active.LanguageCode,
+				LanguageCode:     languageCode,
 				Lemma:            w.Lemma,
 				POS:              w.POS,
 				TranscriptionIPA: w.TranscriptionIPA,
@@ -358,7 +540,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		)
 	}
 
-	return &AnalyzedArticle{Article: article, Words: storedWords}, nil
+	return &AnalyzedArticle{Article: article, Words: storedWords, Notice: notice}, nil
 }
 
 func progress(p ProgressFunc, s Stage) {
