@@ -1,5 +1,14 @@
 # Releases
 
+## 16 — history
+Появилась команда `/history` и callback-семейство `hist:*`: из
+`articles_repo` отдаются 10 статей пользователя на страницу
+(`ListByUser`/`CountByUser`, ORDER BY `created_at DESC`), кнопка
+по статье открывает сохранённую article card без повторного
+вызова LLM, рендер теперь живёт в общем `handlers/card.go`
+(используется и в URL-флоу). Добавлены i18n-строки `history.*`
+для ru/en/es и репо-тест на пагинацию + изоляцию по user_id.
+
 ## 15.6 — refactor-remove-unused-withtx
 Удалён мёртвый метод `(*sqliteRepo).WithTx(ctx, fn) error` из
 `internal/articles/repo.go` — он не входил в интерфейс `Repository`,

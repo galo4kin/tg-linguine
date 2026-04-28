@@ -63,16 +63,19 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 
 	urlH := handlers.NewURL(deps.Users, deps.Articles, deps.Bundle, log)
 	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
+	historyH := handlers.NewHistory(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setkey", bot.MatchTypeExact, apiKey.HandleSetKeyCommand)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/history", bot.MatchTypeExact, historyH.HandleCommand)
 	b.RegisterHandlerMatchFunc(matchURLText(keyWaiter), urlH.Handle)
 	b.RegisterHandlerMatchFunc(matchAPIKeyText(keyWaiter), apiKey.HandleIncomingText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLang, bot.MatchTypePrefix, onb.HandleLanguage)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLevel, bot.MatchTypePrefix, onb.HandleLevel)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWords, bot.MatchTypePrefix, wordsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWordStatus, bot.MatchTypePrefix, wordsH.HandleStatusCallback)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixHistory, bot.MatchTypePrefix, historyH.HandleCallback)
 
 	tb.b = b
 	return tb, nil

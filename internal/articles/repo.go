@@ -26,6 +26,11 @@ type Repository interface {
 	// CategoryIDByCode returns the categories.id for a code, inserting the row
 	// if it does not yet exist.
 	UpsertCategory(ctx context.Context, q DBTX, code string) (int64, error)
+	// ListByUser returns up to `limit` articles for the user, ordered by
+	// created_at DESC (newest first), starting at `offset`.
+	ListByUser(ctx context.Context, q DBTX, userID int64, limit, offset int) ([]Article, error)
+	// CountByUser returns how many articles the user has stored.
+	CountByUser(ctx context.Context, q DBTX, userID int64) (int, error)
 }
 
 type sqliteRepo struct {
@@ -89,6 +94,48 @@ func (r *sqliteRepo) ByID(ctx context.Context, q DBTX, id int64) (*Article, erro
 		return nil, fmt.Errorf("articles: byID: %w", err)
 	}
 	return &a, nil
+}
+
+func (r *sqliteRepo) ListByUser(ctx context.Context, q DBTX, userID int64, limit, offset int) ([]Article, error) {
+	const stmt = `
+		SELECT id, user_id, source_url, source_url_hash, title, language_code,
+		       COALESCE(cefr_detected, ''), COALESCE(summary_target, ''),
+		       COALESCE(summary_native, ''), COALESCE(adapted_versions, ''),
+		       COALESCE(category_id, 0), created_at
+		FROM articles
+		WHERE user_id = ?
+		ORDER BY created_at DESC, id DESC
+		LIMIT ? OFFSET ?
+	`
+	rows, err := q.QueryContext(ctx, stmt, userID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("articles: list by user: %w", err)
+	}
+	defer rows.Close()
+	var out []Article
+	for rows.Next() {
+		var a Article
+		if err := rows.Scan(
+			&a.ID, &a.UserID, &a.SourceURL, &a.SourceURLHash, &a.Title, &a.LanguageCode,
+			&a.CEFRDetected, &a.SummaryTarget, &a.SummaryNative, &a.AdaptedVersions,
+			&a.CategoryID, &a.CreatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("articles: scan list: %w", err)
+		}
+		out = append(out, a)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("articles: iter list: %w", err)
+	}
+	return out, nil
+}
+
+func (r *sqliteRepo) CountByUser(ctx context.Context, q DBTX, userID int64) (int, error) {
+	var n int
+	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM articles WHERE user_id = ?`, userID).Scan(&n); err != nil {
+		return 0, fmt.Errorf("articles: count by user: %w", err)
+	}
+	return n, nil
 }
 
 func (r *sqliteRepo) UpsertCategory(ctx context.Context, q DBTX, code string) (int64, error) {

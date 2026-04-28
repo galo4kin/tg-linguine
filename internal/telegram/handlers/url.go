@@ -3,7 +3,6 @@ package handlers
 import (
 	"context"
 	"errors"
-	"fmt"
 	"log/slog"
 	"regexp"
 	"strings"
@@ -102,28 +101,18 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 	}
 
 	if statusMsg != nil {
+		preview := make([]string, 0, len(result.Words))
+		for _, w := range result.Words {
+			preview = append(preview, w.Lemma)
+		}
 		if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:      msg.Chat.ID,
 			MessageID:   statusMsg.ID,
-			Text:        renderArticleCard(loc, result),
-			ReplyMarkup: articleCardKeyboard(loc, result),
+			Text:        renderArticleCard(loc, result.Article, preview, len(result.Words)),
+			ReplyMarkup: articleCardKeyboard(loc, result.Article.ID, len(result.Words)),
 		}); err != nil {
 			h.log.Debug("url: send card", "err", err)
 		}
-	}
-}
-
-func articleCardKeyboard(loc *goi18n.Localizer, r *articles.AnalyzedArticle) *models.InlineKeyboardMarkup {
-	if r == nil || r.Article == nil || len(r.Words) == 0 {
-		return nil
-	}
-	return &models.InlineKeyboardMarkup{
-		InlineKeyboard: [][]models.InlineKeyboardButton{
-			{{
-				Text:         tgi18n.T(loc, "article.card.show_all_words", nil),
-				CallbackData: fmt.Sprintf("%s%d:0", CallbackPrefixWords, r.Article.ID),
-			}},
-		},
 	}
 }
 
@@ -154,34 +143,3 @@ func articleErrorMessageID(err error) string {
 	}
 }
 
-func renderArticleCard(loc *goi18n.Localizer, r *articles.AnalyzedArticle) string {
-	const previewLimit = 5
-
-	var sb strings.Builder
-	fmt.Fprintf(&sb, "%s\n", strings.TrimSpace(r.Article.Title))
-	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "article.card.cefr", map[string]string{"Level": r.Article.CEFRDetected}))
-	if r.Article.SummaryTarget != "" {
-		sb.WriteString(strings.TrimSpace(r.Article.SummaryTarget))
-		sb.WriteString("\n\n")
-	}
-
-	if len(r.Words) == 0 {
-		sb.WriteString(tgi18n.T(loc, "article.card.no_words", nil))
-		return sb.String()
-	}
-
-	sb.WriteString(tgi18n.T(loc, "article.card.words_header", nil))
-	sb.WriteString("\n")
-	limit := len(r.Words)
-	if limit > previewLimit {
-		limit = previewLimit
-	}
-	for i := 0; i < limit; i++ {
-		w := r.Words[i]
-		fmt.Fprintf(&sb, "• %s\n", w.Lemma)
-	}
-	if len(r.Words) > previewLimit {
-		sb.WriteString(tgi18n.T(loc, "article.card.more_words", map[string]int{"Count": len(r.Words) - previewLimit}))
-	}
-	return sb.String()
-}

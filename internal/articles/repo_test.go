@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 
@@ -84,6 +85,82 @@ func TestArticleRepository_UpsertCategory(t *testing.T) {
 	if id, _ := repo.UpsertCategory(ctx, db, ""); id != 0 {
 		t.Fatalf("empty code should return 0, got %d", id)
 	}
+}
+
+func TestArticleRepository_ListByUser_Pagination(t *testing.T) {
+	db := newTestDB(t)
+	repo := articles.NewSQLiteRepository(db)
+	ctx := context.Background()
+
+	if _, err := db.Exec(`INSERT INTO users (telegram_user_id, interface_language) VALUES (?, ?)`, 1002, "en"); err != nil {
+		t.Fatalf("seed user 2: %v", err)
+	}
+
+	// 12 articles for user 1, 3 for user 2.
+	for i := 0; i < 12; i++ {
+		a := &articles.Article{
+			UserID:        1,
+			SourceURL:     "https://example.com/u1-" + strconvI(i),
+			SourceURLHash: "h1-" + strconvI(i),
+			Title:         "U1 article " + strconvI(i),
+			LanguageCode:  "en",
+		}
+		if err := repo.Insert(ctx, db, a); err != nil {
+			t.Fatalf("insert u1: %v", err)
+		}
+	}
+	for i := 0; i < 3; i++ {
+		a := &articles.Article{
+			UserID:        2,
+			SourceURL:     "https://example.com/u2-" + strconvI(i),
+			SourceURLHash: "h2-" + strconvI(i),
+			Title:         "U2 article " + strconvI(i),
+			LanguageCode:  "en",
+		}
+		if err := repo.Insert(ctx, db, a); err != nil {
+			t.Fatalf("insert u2: %v", err)
+		}
+	}
+
+	if n, err := repo.CountByUser(ctx, db, 1); err != nil || n != 12 {
+		t.Fatalf("CountByUser(1) = %d, %v", n, err)
+	}
+	if n, err := repo.CountByUser(ctx, db, 2); err != nil || n != 3 {
+		t.Fatalf("CountByUser(2) = %d, %v", n, err)
+	}
+	if n, err := repo.CountByUser(ctx, db, 999); err != nil || n != 0 {
+		t.Fatalf("CountByUser(missing) = %d, %v", n, err)
+	}
+
+	page0, err := repo.ListByUser(ctx, db, 1, 10, 0)
+	if err != nil {
+		t.Fatalf("ListByUser p0: %v", err)
+	}
+	if len(page0) != 10 {
+		t.Fatalf("expected 10 on page 0, got %d", len(page0))
+	}
+	page1, err := repo.ListByUser(ctx, db, 1, 10, 10)
+	if err != nil {
+		t.Fatalf("ListByUser p1: %v", err)
+	}
+	if len(page1) != 2 {
+		t.Fatalf("expected 2 on page 1, got %d", len(page1))
+	}
+
+	// DESC order — within the same created_at second SQLite ties on id DESC.
+	if page0[0].ID < page0[1].ID {
+		t.Fatalf("expected newest-first ordering, got %d before %d", page0[0].ID, page0[1].ID)
+	}
+
+	for _, a := range page0 {
+		if a.UserID != 1 {
+			t.Fatalf("ListByUser(1) leaked user_id=%d row", a.UserID)
+		}
+	}
+}
+
+func strconvI(i int) string {
+	return fmt.Sprintf("%03d", i)
 }
 
 func TestArticleRepository_UniqueConstraint(t *testing.T) {
