@@ -34,6 +34,10 @@ type Repository interface {
 	// ByUserAndHash looks up an article previously stored for the user under the
 	// same (url_hash, language_code) — returns ErrNotFound if no such row.
 	ByUserAndHash(ctx context.Context, q DBTX, userID int64, urlHash, languageCode string) (*Article, error)
+	// UpdateAdaptedVersions rewrites only the adapted_versions JSON blob for
+	// an existing article — used by step 19 to merge a freshly generated
+	// per-level adaptation without touching the rest of the row.
+	UpdateAdaptedVersions(ctx context.Context, q DBTX, articleID int64, raw string) error
 }
 
 type sqliteRepo struct {
@@ -163,6 +167,13 @@ func (r *sqliteRepo) ByUserAndHash(ctx context.Context, q DBTX, userID int64, ur
 		return nil, fmt.Errorf("articles: by user and hash: %w", err)
 	}
 	return &a, nil
+}
+
+func (r *sqliteRepo) UpdateAdaptedVersions(ctx context.Context, q DBTX, articleID int64, raw string) error {
+	if _, err := q.ExecContext(ctx, `UPDATE articles SET adapted_versions = ? WHERE id = ?`, nullStr(raw), articleID); err != nil {
+		return fmt.Errorf("articles: update adapted: %w", err)
+	}
+	return nil
 }
 
 func (r *sqliteRepo) UpsertCategory(ctx context.Context, q DBTX, code string) (int64, error) {

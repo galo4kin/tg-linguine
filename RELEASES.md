@@ -1,5 +1,24 @@
 # Releases
 
+## 19 — regen-on-level-change
+Поле `articles.adapted_versions` переехало с относительной модели
+`{lower,current,higher}` на абсолютную карту по CEFR (`{"A1":"…", …,
+"C2":"…"}`); LLM-анализ конвертирует относительные уровни в
+абсолютные через новый `articles.CEFRShift` с использованием
+текущего `cefr_level` пользователя. Кэш статьи теперь срабатывает
+независимо от уровня: старая статья переиспользуется и догенерируется
+лениво. Добавлен мини-промпт `llm.Adapt` (`adapt_system.txt` +
+`adapt_user.tmpl` + `schema/adapt.json`) и `articles.Service.Adapt`,
+который выбирает ближайший по CEFR существующий source-text, зовёт
+LLM, мержит ответ в `adapted_versions` через
+`Repository.UpdateAdaptedVersions`. URL/History/Card-handler-ы
+проверяют наличие нужного абсолютного уровня и при его отсутствии
+показывают статус «🪄 Адаптирую под `<level>`…», после чего
+перерисовывают карточку. i18n обновлён в ru/en/es; добавлен тест
+`TestAdapt_FillsMissingLevelAndCachesIt` (LLM зовётся один раз,
+повторный запрос — cache hit) и заменён старый тест
+fall-through-на-CEFR-mismatch.
+
 ## 18 — adapted-summary
 Article card теперь поддерживает три уровня адаптации текста и
 переключение языка summary без отправки нового сообщения. Добавлен

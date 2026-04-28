@@ -63,10 +63,38 @@ func parseCardLevel(s string) CardLevel {
 	}
 }
 
+// resolveAbsoluteLevel maps a relative card view to an absolute CEFR level
+// using the user's current learning level. Returns ("", false) when the
+// shift falls off the A1..C2 range (no "lower" at A1, no "higher" at C2).
+func resolveAbsoluteLevel(userCEFR string, view CardLevel) (string, bool) {
+	switch view {
+	case CardLevelLower:
+		return articles.CEFRShift(userCEFR, -1)
+	case CardLevelHigher:
+		return articles.CEFRShift(userCEFR, +1)
+	default:
+		if articles.IsCEFR(userCEFR) {
+			return userCEFR, true
+		}
+		return "", false
+	}
+}
+
+func levelLabelKey(view CardLevel) string {
+	switch view {
+	case CardLevelLower:
+		return "article.card.adapted.lower"
+	case CardLevelHigher:
+		return "article.card.adapted.higher"
+	default:
+		return "article.card.adapted.current"
+	}
+}
+
 // renderArticleCard renders the headline, the (target/native) summary, the
 // adapted body for the chosen level (when present), and a short preview of
 // the first few lemmas.
-func renderArticleCard(loc *goi18n.Localizer, article *articles.Article, previewLemmas []string, totalWords int, view ArticleView) string {
+func renderArticleCard(loc *goi18n.Localizer, article *articles.Article, userCEFR string, previewLemmas []string, totalWords int, view ArticleView) string {
 	if article == nil {
 		return ""
 	}
@@ -88,9 +116,10 @@ func renderArticleCard(loc *goi18n.Localizer, article *articles.Article, preview
 	}
 
 	adapted := article.ParseAdaptedVersions()
-	body, bodyLabelKey := pickAdapted(adapted, view.Level)
-	if body != "" {
-		fmt.Fprintf(&sb, "%s\n%s\n\n", tgi18n.T(loc, bodyLabelKey, nil), strings.TrimSpace(body))
+	if abs, ok := resolveAbsoluteLevel(userCEFR, view.Level); ok {
+		if body := adapted[abs]; body != "" {
+			fmt.Fprintf(&sb, "%s\n%s\n\n", tgi18n.T(loc, levelLabelKey(view.Level), nil), strings.TrimSpace(body))
+		}
 	}
 
 	if totalWords == 0 {
@@ -112,30 +141,18 @@ func renderArticleCard(loc *goi18n.Localizer, article *articles.Article, preview
 	return sb.String()
 }
 
-func pickAdapted(a articles.AdaptedVersions, level CardLevel) (text, labelKey string) {
-	switch level {
-	case CardLevelLower:
-		return a.Lower, "article.card.adapted.lower"
-	case CardLevelHigher:
-		return a.Higher, "article.card.adapted.higher"
-	default:
-		return a.Current, "article.card.adapted.current"
-	}
-}
-
 // articleCardKeyboard returns the inline keyboard shown under the article
 // card. It always renders three "level" buttons (greying out unavailable
 // adaptations with a noop callback), a summary-language toggle when both
 // summaries exist, and the "Show all words" button when totalWords > 0.
-func articleCardKeyboard(loc *goi18n.Localizer, article *articles.Article, totalWords int, view ArticleView) *models.InlineKeyboardMarkup {
+func articleCardKeyboard(loc *goi18n.Localizer, article *articles.Article, userCEFR string, totalWords int, view ArticleView) *models.InlineKeyboardMarkup {
 	if article == nil {
 		return nil
 	}
 	rows := make([][]models.InlineKeyboardButton, 0, 3)
 
-	adapted := article.ParseAdaptedVersions()
-	if adapted.Lower != "" || adapted.Current != "" || adapted.Higher != "" {
-		rows = append(rows, levelRow(loc, article.ID, view, adapted))
+	if articles.IsCEFR(userCEFR) {
+		rows = append(rows, levelRow(loc, article.ID, view, userCEFR))
 	}
 
 	if article.SummaryTarget != "" && article.SummaryNative != "" {
@@ -155,19 +172,20 @@ func articleCardKeyboard(loc *goi18n.Localizer, article *articles.Article, total
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
-func levelRow(loc *goi18n.Localizer, articleID int64, view ArticleView, adapted articles.AdaptedVersions) []models.InlineKeyboardButton {
+func levelRow(loc *goi18n.Localizer, articleID int64, view ArticleView, userCEFR string) []models.InlineKeyboardButton {
 	return []models.InlineKeyboardButton{
-		levelButton(loc, articleID, view, CardLevelLower, "article.card.btn.level_lower", adapted.Lower != ""),
-		levelButton(loc, articleID, view, CardLevelCurrent, "article.card.btn.level_current", adapted.Current != ""),
-		levelButton(loc, articleID, view, CardLevelHigher, "article.card.btn.level_higher", adapted.Higher != ""),
+		levelButton(loc, articleID, view, CardLevelLower, "article.card.btn.level_lower", userCEFR),
+		levelButton(loc, articleID, view, CardLevelCurrent, "article.card.btn.level_current", userCEFR),
+		levelButton(loc, articleID, view, CardLevelHigher, "article.card.btn.level_higher", userCEFR),
 	}
 }
 
-func levelButton(loc *goi18n.Localizer, articleID int64, view ArticleView, target CardLevel, labelKey string, available bool) models.InlineKeyboardButton {
+func levelButton(loc *goi18n.Localizer, articleID int64, view ArticleView, target CardLevel, labelKey, userCEFR string) models.InlineKeyboardButton {
 	label := tgi18n.T(loc, labelKey, nil)
 	if view.Level == target {
 		label = "✓ " + label
 	}
+	_, available := resolveAbsoluteLevel(userCEFR, target)
 	if !available {
 		return models.InlineKeyboardButton{
 			Text:         label,

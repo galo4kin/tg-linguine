@@ -61,10 +61,10 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	keyWaiter := session.NewAPIKeyWaiter(apiKeyPromptTTL)
 	apiKey := handlers.NewAPIKey(deps.Users, deps.APIKeys, deps.LLMProvider, keyWaiter, deps.Bundle, log)
 
-	urlH := handlers.NewURL(deps.Users, deps.Articles, deps.Bundle, log)
+	urlH := handlers.NewURL(deps.Users, deps.Languages, deps.Articles, deps.Bundle, log)
 	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
-	historyH := handlers.NewHistory(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
-	cardH := handlers.NewCard(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
+	historyH := handlers.NewHistory(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
+	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))

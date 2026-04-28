@@ -31,6 +31,11 @@ type stubLLM struct {
 	err         error
 	lastRequest *llm.AnalyzeRequest
 	calls       int
+
+	adaptResp        llm.AdaptResponse
+	adaptErr         error
+	adaptCalls       int
+	lastAdaptRequest *llm.AdaptRequest
 }
 
 func (s *stubLLM) ValidateAPIKey(ctx context.Context, key string) error { return nil }
@@ -38,6 +43,11 @@ func (s *stubLLM) Analyze(ctx context.Context, key string, req llm.AnalyzeReques
 	s.calls++
 	s.lastRequest = &req
 	return s.resp, s.err
+}
+func (s *stubLLM) Adapt(ctx context.Context, key string, req llm.AdaptRequest) (llm.AdaptResponse, error) {
+	s.adaptCalls++
+	s.lastAdaptRequest = &req
+	return s.adaptResp, s.adaptErr
 }
 
 func newServiceTestDB(t *testing.T) *sql.DB {
@@ -326,11 +336,12 @@ func TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR(t *testing.T) {
 	}
 }
 
-// TestAnalyzeArticle_CacheMissOnCEFRChange covers the fall-through: when the
-// stored article's detected CEFR differs from the user's current level, the
-// pipeline must NOT shortcut and must invoke the extractor + LLM again. This
-// pins the behavior that step 19 will revisit (regen on level change).
-func TestAnalyzeArticle_CacheMissOnCEFRChange(t *testing.T) {
+// TestAnalyzeArticle_CacheHitOnCEFRChange pins step 19's intent: when the
+// user's CEFR has shifted since the article was originally analyzed, opening
+// the same URL must still hit the cache (no extractor, no Analyze call). The
+// per-level adaptation that the user is now missing is filled in lazily via
+// Service.Adapt elsewhere — not by re-running the full pipeline.
+func TestAnalyzeArticle_CacheHitOnCEFRChange(t *testing.T) {
 	db := newServiceTestDB(t)
 	cipher := newCipher(t)
 
@@ -356,7 +367,7 @@ func TestAnalyzeArticle_CacheMissOnCEFRChange(t *testing.T) {
 		t.Fatalf("seed article: %v", err)
 	}
 
-	llmStub := &stubLLM{err: llm.ErrUnavailable} // will be called and fail; counter is what we assert.
+	llmStub := &stubLLM{err: llm.ErrUnavailable}
 	extractorCalls := 0
 	svc := articles.NewService(articles.ServiceDeps{
 		DB:        db,
@@ -374,12 +385,105 @@ func TestAnalyzeArticle_CacheMissOnCEFRChange(t *testing.T) {
 		Statuses:     dictionary.NewSQLiteUserWordStatusRepository(db),
 	})
 
-	_, err := svc.AnalyzeArticle(context.Background(), userID, rawURL, nil)
-	if err == nil {
-		t.Fatalf("expected error on extractor failure")
+	result, err := svc.AnalyzeArticle(context.Background(), userID, rawURL, nil)
+	if err != nil {
+		t.Fatalf("expected cache hit, got err: %v", err)
 	}
-	if extractorCalls != 1 {
-		t.Fatalf("CEFR mismatch must fall through to extractor; calls=%d", extractorCalls)
+	if extractorCalls != 0 {
+		t.Fatalf("cache hit must not invoke extractor; calls=%d", extractorCalls)
+	}
+	if llmStub.calls != 0 {
+		t.Fatalf("cache hit must not invoke LLM Analyze; calls=%d", llmStub.calls)
+	}
+	if result.Article.ID != a.ID {
+		t.Fatalf("expected cached article id=%d, got %d", a.ID, result.Article.ID)
+	}
+}
+
+// TestAdapt_FillsMissingLevelAndCachesIt covers the full step 19 round trip:
+// asking for a level that's missing from adapted_versions invokes the LLM
+// mini-prompt, persists the result, and a second call for the same level is
+// served from the merged JSON without touching the LLM again.
+func TestAdapt_FillsMissingLevelAndCachesIt(t *testing.T) {
+	db := newServiceTestDB(t)
+	cipher := newCipher(t)
+
+	usersSvc := users.NewService(users.NewSQLiteRepository(db))
+	langs := users.NewSQLiteUserLanguageRepository(db)
+	keys := users.NewSQLiteAPIKeyRepository(db, cipher)
+
+	userID := seedUserAndKey(t, db)
+	if err := keys.Set(context.Background(), userID, users.ProviderGroq, "gsk_test"); err != nil {
+		t.Fatalf("set key: %v", err)
+	}
+
+	repo := articles.NewSQLiteRepository(db)
+	// Seed an article with a B1 adaptation already present (e.g. previously
+	// analyzed when the user was at B1).
+	a := &articles.Article{
+		UserID:          userID,
+		SourceURL:       "https://example.com/regen",
+		SourceURLHash:   "h",
+		Title:           "x",
+		LanguageCode:    "en",
+		CEFRDetected:    "B2",
+		AdaptedVersions: `{"B1":"old b1 body"}`,
+	}
+	if err := repo.Insert(context.Background(), db, a); err != nil {
+		t.Fatalf("seed: %v", err)
+	}
+
+	llmStub := &stubLLM{
+		adaptResp: llm.AdaptResponse{AdaptedText: "fresh B2 body", SummaryTarget: "fresh summary"},
+	}
+	svc := articles.NewService(articles.ServiceDeps{
+		DB:           db,
+		Users:        usersSvc,
+		Languages:    langs,
+		Keys:         keys,
+		Extractor:    stubExtractor{},
+		LLM:          llmStub,
+		Articles:     repo,
+		Dictionary:   dictionary.NewSQLiteRepository(db),
+		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
+		Statuses:     dictionary.NewSQLiteUserWordStatusRepository(db),
+	})
+
+	got, err := svc.Adapt(context.Background(), userID, a.ID, "B2")
+	if err != nil {
+		t.Fatalf("Adapt B2: %v", err)
+	}
+	if got != "fresh B2 body" {
+		t.Fatalf("Adapt returned %q, want %q", got, "fresh B2 body")
+	}
+	if llmStub.adaptCalls != 1 {
+		t.Fatalf("expected 1 LLM Adapt call, got %d", llmStub.adaptCalls)
+	}
+	// The B1 source the LLM saw must be the previously stored adaptation.
+	if llmStub.lastAdaptRequest == nil || llmStub.lastAdaptRequest.SourceText != "old b1 body" || llmStub.lastAdaptRequest.SourceCEFR != "B1" {
+		t.Fatalf("unexpected adapt request: %+v", llmStub.lastAdaptRequest)
+	}
+
+	// The freshly generated B2 must now be merged into the JSON blob.
+	stored, err := repo.ByID(context.Background(), db, a.ID)
+	if err != nil {
+		t.Fatalf("reload: %v", err)
+	}
+	parsed := stored.ParseAdaptedVersions()
+	if parsed["B2"] != "fresh B2 body" || parsed["B1"] != "old b1 body" {
+		t.Fatalf("merged adapted_versions wrong: %+v", parsed)
+	}
+
+	// Second call for the same level is a no-op cache hit — no extra LLM call.
+	again, err := svc.Adapt(context.Background(), userID, a.ID, "B2")
+	if err != nil {
+		t.Fatalf("Adapt B2 (cache hit): %v", err)
+	}
+	if again != "fresh B2 body" {
+		t.Fatalf("cache hit returned %q", again)
+	}
+	if llmStub.adaptCalls != 1 {
+		t.Fatalf("cache hit must not invoke LLM Adapt; calls=%d", llmStub.adaptCalls)
 	}
 }
 

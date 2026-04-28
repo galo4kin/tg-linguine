@@ -1,0 +1,9 @@
+Target language: {{.TargetLanguage}}
+Native language: {{.NativeLanguage}}
+Adapt to CEFR level: {{.TargetCEFR}}
+Source CEFR level (current text): {{if .SourceCEFR}}{{.SourceCEFR}}{{else}}unknown{{end}}
+
+Source text:
+{{.SourceText}}
+
+Return the JSON object now.

@@ -34,29 +34,35 @@ const CallbackPrefixHistory = "hist:"
 // reuses the article-card renderer so the reopened card matches what the user
 // saw right after the original analysis (without re-calling the LLM).
 type History struct {
-	users    *users.Service
-	articles articles.Repository
-	awords   dictionary.ArticleWordsRepository
-	bundle   *goi18n.Bundle
-	log      *slog.Logger
-	db       *sql.DB
+	users     *users.Service
+	languages users.UserLanguageRepository
+	articles  articles.Repository
+	awords    dictionary.ArticleWordsRepository
+	regen     CardRegenerator
+	bundle    *goi18n.Bundle
+	log       *slog.Logger
+	db        *sql.DB
 }
 
 func NewHistory(
 	svc *users.Service,
+	languages users.UserLanguageRepository,
 	articleRepo articles.Repository,
 	awords dictionary.ArticleWordsRepository,
+	regen CardRegenerator,
 	db *sql.DB,
 	bundle *goi18n.Bundle,
 	log *slog.Logger,
 ) *History {
 	return &History{
-		users:    svc,
-		articles: articleRepo,
-		awords:   awords,
-		bundle:   bundle,
-		log:      log,
-		db:       db,
+		users:     svc,
+		languages: languages,
+		articles:  articleRepo,
+		awords:    awords,
+		regen:     regen,
+		bundle:    bundle,
+		log:       log,
+		db:        db,
 	}
 }
 
@@ -215,13 +221,44 @@ func (h *History) openArticle(ctx context.Context, b *bot.Bot, chatID any, msgID
 		}
 	}
 
+	userCEFR := ""
+	if active, err := h.languages.Active(ctx, userID); err == nil && active != nil {
+		userCEFR = active.CEFRLevel
+	}
+
 	view := DefaultCardView()
-	text := renderArticleCard(loc, article, preview, totalWords, view)
+	if abs, ok := resolveAbsoluteLevel(userCEFR, view.Level); ok && h.regen != nil {
+		if cur := article.ParseAdaptedVersions(); cur[abs] == "" {
+			if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+				ChatID:    chatID,
+				MessageID: msgID,
+				Text:      tgi18n.T(loc, "article.regenerating", map[string]string{"Level": abs}),
+			}); err != nil {
+				h.log.Debug("history open: edit status", "err", err)
+			}
+			if _, err := h.regen.Adapt(ctx, userID, articleID, abs); err != nil {
+				h.log.Warn("history open: regen", "err", err, "article_id", articleID, "target", abs)
+				if _, editErr := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+					ChatID:    chatID,
+					MessageID: msgID,
+					Text:      tgi18n.T(loc, articleErrorMessageID(err), nil),
+				}); editErr != nil {
+					h.log.Debug("history open: edit error", "err", editErr)
+				}
+				return
+			}
+			if reloaded, err := h.articles.ByID(ctx, h.db, articleID); err == nil {
+				article = reloaded
+			}
+		}
+	}
+
+	text := renderArticleCard(loc, article, userCEFR, preview, totalWords, view)
 	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      chatID,
 		MessageID:   msgID,
 		Text:        text,
-		ReplyMarkup: articleCardKeyboard(loc, article, totalWords, view),
+		ReplyMarkup: articleCardKeyboard(loc, article, userCEFR, totalWords, view),
 	}); err != nil {
 		h.log.Debug("history open: edit", "err", err)
 	}

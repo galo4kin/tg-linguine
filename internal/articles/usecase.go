@@ -17,6 +17,8 @@ import (
 var (
 	ErrNoActiveLanguage = errors.New("articles: user has no active language")
 	ErrNoAPIKey         = errors.New("articles: user has no api key")
+	ErrNoSourceText     = errors.New("articles: no adapted text to use as regen source")
+	ErrUnknownCEFR      = errors.New("articles: unknown cefr level")
 )
 
 // Stage notifies the caller of progress; used by the Telegram handler to
@@ -114,7 +116,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		if lookupErr != nil && !errors.Is(lookupErr, ErrNotFound) {
 			return nil, fmt.Errorf("cache lookup: %w", lookupErr)
 		}
-		if existing != nil && existing.CEFRDetected == active.CEFRLevel {
+		if existing != nil {
 			words, err := s.loadStoredWords(ctx, existing)
 			if err != nil {
 				return nil, err
@@ -157,7 +159,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 
 	progress(onProgress, StagePersisting)
 
-	adapted, err := json.Marshal(resp.AdaptedVersions)
+	adapted, err := json.Marshal(adaptedFromLLM(active.CEFRLevel, resp.AdaptedVersions))
 	if err != nil {
 		return nil, fmt.Errorf("marshal adapted: %w", err)
 	}
@@ -241,6 +243,161 @@ func progress(p ProgressFunc, s Stage) {
 	if p != nil {
 		p(s)
 	}
+}
+
+// ArticleByID is a thin pass-through to the repository for callers that
+// already depend on the Service (e.g. handlers triggering regen) and don't
+// want to take a separate dependency on the repo.
+func (s *Service) ArticleByID(ctx context.Context, id int64) (*Article, error) {
+	return s.articles.ByID(ctx, s.db, id)
+}
+
+// Adapt fills in a missing per-level adaptation for a stored article. It
+// resolves the user's API key, picks the closest available source text from
+// the article's existing adaptations, calls the LLM mini-prompt, and merges
+// the result into the article's adapted_versions JSON. Returns the freshly
+// generated text (or the cached one if the level was already present, which
+// makes this idempotent).
+func (s *Service) Adapt(ctx context.Context, userID, articleID int64, targetLevel string) (string, error) {
+	if !IsCEFR(targetLevel) {
+		return "", ErrUnknownCEFR
+	}
+
+	article, err := s.articles.ByID(ctx, s.db, articleID)
+	if err != nil {
+		return "", err
+	}
+	if article.UserID != userID {
+		return "", ErrNotFound
+	}
+
+	current := article.ParseAdaptedVersions()
+	if v, ok := current[targetLevel]; ok && v != "" {
+		return v, nil
+	}
+
+	user, err := s.users.ByID(ctx, userID)
+	if err != nil {
+		return "", fmt.Errorf("load user: %w", err)
+	}
+	key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
+	if err != nil {
+		if errors.Is(err, users.ErrNotFound) {
+			return "", ErrNoAPIKey
+		}
+		return "", fmt.Errorf("api key: %w", err)
+	}
+
+	sourceText, sourceCEFR := pickAdaptSource(current, targetLevel, article.CEFRDetected)
+	if sourceText == "" {
+		return "", ErrNoSourceText
+	}
+
+	resp, err := s.llm.Adapt(ctx, key, llm.AdaptRequest{
+		TargetLanguage: article.LanguageCode,
+		NativeLanguage: user.InterfaceLanguage,
+		TargetCEFR:     targetLevel,
+		SourceCEFR:     sourceCEFR,
+		SourceText:     sourceText,
+	})
+	if err != nil {
+		return "", err
+	}
+
+	current[targetLevel] = resp.AdaptedText
+	raw, err := json.Marshal(current)
+	if err != nil {
+		return "", fmt.Errorf("articles: marshal adapted: %w", err)
+	}
+	if err := s.articles.UpdateAdaptedVersions(ctx, s.db, articleID, string(raw)); err != nil {
+		return "", err
+	}
+	if s.log != nil {
+		s.log.Info("article adapted",
+			"user_id", userID,
+			"article_id", articleID,
+			"target_cefr", targetLevel,
+			"source_cefr", sourceCEFR,
+		)
+	}
+	return resp.AdaptedText, nil
+}
+
+// adaptedFromLLM converts the LLM's relative {lower, current, higher} reply
+// into the absolute CEFR-keyed map we persist. Empty strings (LLM output for
+// out-of-range slots like "lower" at A1) are dropped so the renderer treats
+// those slots as missing rather than empty-strings.
+func adaptedFromLLM(userLevel string, v llm.AdaptedVersions) AdaptedVersions {
+	out := AdaptedVersions{}
+	if lvl, ok := CEFRShift(userLevel, -1); ok && v.Lower != "" {
+		out[lvl] = v.Lower
+	}
+	if IsCEFR(userLevel) && v.Current != "" {
+		out[userLevel] = v.Current
+	}
+	if lvl, ok := CEFRShift(userLevel, +1); ok && v.Higher != "" {
+		out[lvl] = v.Higher
+	}
+	return out
+}
+
+// pickAdaptSource picks the best available adapted text to feed back into
+// the LLM as a regen source. Preference order: closest absolute level to
+// `target` (by CEFR distance), with ties broken in favor of the lower level
+// — empirically the LLM has an easier time adapting upward than downward.
+// If the absolute-keyed map is empty, returns ("", "") and the caller bails.
+func pickAdaptSource(current AdaptedVersions, target, articleCEFR string) (text, sourceCEFR string) {
+	if len(current) == 0 {
+		return "", ""
+	}
+	ti := indexOfCEFR(target)
+	if ti < 0 {
+		// Unknown target — return any non-empty entry.
+		for k, v := range current {
+			if v != "" {
+				return v, k
+			}
+		}
+		return "", ""
+	}
+	bestIdx := -1
+	for k, v := range current {
+		if v == "" {
+			continue
+		}
+		ki := indexOfCEFR(k)
+		if ki < 0 {
+			continue
+		}
+		if bestIdx < 0 || abs(ki-ti) < abs(bestIdx-ti) ||
+			(abs(ki-ti) == abs(bestIdx-ti) && ki < bestIdx) {
+			bestIdx = ki
+			text = v
+			sourceCEFR = k
+		}
+	}
+	if text == "" && articleCEFR != "" {
+		// Fall back to whatever absolute level the article was originally
+		// detected at — caller may pass an empty hint.
+		sourceCEFR = articleCEFR
+	}
+	return text, sourceCEFR
+}
+
+func indexOfCEFR(s string) int {
+	for i, l := range CEFRLevels {
+		if l == s {
+			return i
+		}
+	}
+	return -1
+}
+
+func abs(x int) int {
+	if x < 0 {
+		return -x
+	}
+	return x
 }
 
 // loadStoredWords reconstructs the DictionaryWord slice for a previously

@@ -23,14 +23,15 @@ var urlRe = regexp.MustCompile(`https?://[^\s<>"']+`)
 // URLHandler runs the AnalyzeArticle pipeline for any message whose text
 // contains an http(s) URL.
 type URLHandler struct {
-	users    *users.Service
-	articles *articles.Service
-	bundle   *goi18n.Bundle
-	log      *slog.Logger
+	users     *users.Service
+	languages users.UserLanguageRepository
+	articles  *articles.Service
+	bundle    *goi18n.Bundle
+	log       *slog.Logger
 }
 
-func NewURL(svc *users.Service, articleSvc *articles.Service, bundle *goi18n.Bundle, log *slog.Logger) *URLHandler {
-	return &URLHandler{users: svc, articles: articleSvc, bundle: bundle, log: log}
+func NewURL(svc *users.Service, languages users.UserLanguageRepository, articleSvc *articles.Service, bundle *goi18n.Bundle, log *slog.Logger) *URLHandler {
+	return &URLHandler{users: svc, languages: languages, articles: articleSvc, bundle: bundle, log: log}
 }
 
 func MatchURLMessage(u *models.Update) bool {
@@ -106,11 +107,32 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 			preview = append(preview, w.Lemma)
 		}
 		view := DefaultCardView()
+
+		userCEFR := ""
+		if active, err := h.languages.Active(ctx, u.ID); err == nil && active != nil {
+			userCEFR = active.CEFRLevel
+		}
+
+		article := result.Article
+		// Cache hit on a previously analyzed URL may not yet have the user's
+		// current CEFR adaptation if the user changed level between analyses;
+		// regen lazily so the card lands fully populated.
+		if abs, ok := resolveAbsoluteLevel(userCEFR, view.Level); ok {
+			if cur := article.ParseAdaptedVersions(); cur[abs] == "" {
+				editStatus(tgi18n.T(loc, "article.regenerating", map[string]string{"Level": abs}))
+				if _, err := h.articles.Adapt(ctx, u.ID, article.ID, abs); err != nil {
+					h.log.Warn("url: regen", "err", err, "article_id", article.ID, "target", abs)
+				} else if reloaded, err := h.articles.ArticleByID(ctx, article.ID); err == nil {
+					article = reloaded
+				}
+			}
+		}
+
 		if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:      msg.Chat.ID,
 			MessageID:   statusMsg.ID,
-			Text:        renderArticleCard(loc, result.Article, preview, len(result.Words), view),
-			ReplyMarkup: articleCardKeyboard(loc, result.Article, len(result.Words), view),
+			Text:        renderArticleCard(loc, article, userCEFR, preview, len(result.Words), view),
+			ReplyMarkup: articleCardKeyboard(loc, article, userCEFR, len(result.Words), view),
 		}); err != nil {
 			h.log.Debug("url: send card", "err", err)
 		}
