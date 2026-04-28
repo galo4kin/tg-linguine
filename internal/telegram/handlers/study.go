@@ -372,10 +372,15 @@ func (h *Study) buildDeck(ctx context.Context, userID int64) ([]session.QuizCard
 		}
 
 		direction := h.pickDirection()
-		// Step 51: forced poll-only for manual verification of the new path.
-		// Step 52 lifts the fixed mode and lets the FSM mix both within one
-		// round.
-		ui := session.QuizUIPoll
+		// Mix inline and poll within one round so each card can use either
+		// UI. The first usable card is pinned to inline so the round always
+		// starts with a familiar widget; everything after it is 50/50.
+		var ui session.QuizUIMode
+		if len(deck) == 0 {
+			ui = session.QuizUIInline
+		} else {
+			ui = h.pickUIMode()
+		}
 
 		var dir dictionary.DistractorDirection
 		var correct string
@@ -423,6 +428,12 @@ func (h *Study) pickDirection() session.QuizDirection {
 	h.rngMu.Lock()
 	defer h.rngMu.Unlock()
 	return session.PickQuizDirection(h.rng)
+}
+
+func (h *Study) pickUIMode() session.QuizUIMode {
+	h.rngMu.Lock()
+	defer h.rngMu.Unlock()
+	return session.PickQuizUIMode(h.rng)
 }
 
 func (h *Study) buildOptions(correct string, distractors []string, want int) ([]string, int) {

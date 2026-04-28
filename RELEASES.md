@@ -1,5 +1,8 @@
 # Releases
 
+## 52 — quiz-mixed-ui
+Снят форсаж `UIMode=poll` из шага 51: внутри одного раунда inline-кнопки и нативные quiz-опросы чередуются 50/50, первая карточка раунда всегда inline для предсказуемого старта. Edge cases уже покрыты в шаге 51 — `polls.DropForUser` при «Завершить» делает поздние `poll_answer` no-op'ами с debug-логом.
+
 ## 51 — quiz-native-poll
 Добавлен второй UI-формат квиза — нативный Telegram quiz poll: новый реестр `session.QuizPolls` (pollID → entry с TTL), хендлер `Study.HandlePollAnswer` и `bot.WithAllowedUpdates(... "poll_answer" ...)` в bot.go. Сборка деки временно форсирует `UIMode=poll` для всех вопросов раунда (снимется на шаге 52), фидбэк после ответа приходит отдельным сообщением с кнопкой «Дальше».
 
