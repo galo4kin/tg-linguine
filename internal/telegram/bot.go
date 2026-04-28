@@ -39,6 +39,7 @@ type Deps struct {
 	Articles     *articles.Service
 	ArticleRepo  articles.Repository
 	ArticleWords dictionary.ArticleWordsRepository
+	WordStatuses dictionary.UserWordStatusRepository
 	DB           *sql.DB
 }
 
@@ -61,7 +62,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	apiKey := handlers.NewAPIKey(deps.Users, deps.APIKeys, deps.LLMProvider, keyWaiter, deps.Bundle, log)
 
 	urlH := handlers.NewURL(deps.Users, deps.Articles, deps.Bundle, log)
-	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
+	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
@@ -71,6 +72,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLang, bot.MatchTypePrefix, onb.HandleLanguage)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLevel, bot.MatchTypePrefix, onb.HandleLevel)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWords, bot.MatchTypePrefix, wordsH.HandleCallback)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWordStatus, bot.MatchTypePrefix, wordsH.HandleStatusCallback)
 
 	tb.b = b
 	return tb, nil

@@ -110,11 +110,17 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		return nil, err
 	}
 
+	knownLemmas, err := s.statuses.KnownLemmas(ctx, s.db, userID, active.LanguageCode)
+	if err != nil {
+		return nil, fmt.Errorf("known lemmas: %w", err)
+	}
+
 	progress(onProgress, StageAnalyzing)
 	resp, err := s.llm.Analyze(ctx, key, llm.AnalyzeRequest{
 		TargetLanguage: active.LanguageCode,
 		NativeLanguage: user.InterfaceLanguage,
 		CEFR:           active.CEFRLevel,
+		KnownWords:     knownLemmas,
 		ArticleTitle:   extracted.Title,
 		ArticleText:    extracted.Content,
 	})

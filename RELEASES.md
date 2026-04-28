@@ -1,5 +1,19 @@
 # Releases
 
+## 15 — word-status
+Под каждым словом в paginated-просмотре появились три inline-кнопки
+«Знаю / Учу / Пропустить» (callback `wstat:<article_id>:<page>:<word_id>:<status>`),
+которые upsert-ят `user_word_status` и перерисовывают сообщение —
+выбранная кнопка получает «✓», остальные остаются кликабельными,
+чтобы пользователь мог переключить статус. В `articles.Service.AnalyzeArticle`
+добавлен сбор лемм со статусами `known`/`mastered` через новый
+`UserWordStatusRepository.KnownLemmas`; они уезжают в `llm.AnalyzeRequest.KnownWords`,
+поэтому при повторном анализе статьи на том же языке LLM не предлагает
+уже известные слова. Также добавлен `GetMany` для рендера статусов
+страницы одним запросом, тесты `KnownLemmas`/`GetMany`/интеграционный
+тест проброса `KnownWords` через mock-LLM, а локали ru/en/es обновлены
+строками кнопок и тостов.
+
 ## 14 — deploy-v01
 Walking Skeleton поднят на mac mini под cron-watchdog. Добавлен
 `scripts/linguine-watchdog.sh` (адаптация `boltun-watchdog.sh`,

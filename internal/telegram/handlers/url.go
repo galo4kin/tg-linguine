@@ -117,10 +117,6 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 	}
 }
 
-// CallbackPrefixWords is the prefix for the "show all words" pagination
-// callback registered by step 13.
-const CallbackPrefixWords = "words:"
-
 func articleCardKeyboard(loc *goi18n.Localizer, r *articles.AnalyzedArticle) *models.InlineKeyboardMarkup {
 	if r == nil || r.Article == nil || len(r.Words) == 0 {
 		return nil

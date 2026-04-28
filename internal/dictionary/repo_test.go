@@ -114,6 +114,98 @@ func TestDictionary_TransactionalAtomicity(t *testing.T) {
 	}
 }
 
+func TestUserWordStatus_KnownLemmas_FilterByLanguageAndStatus(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	// Seed a couple of dictionary words in two languages.
+	enHouse, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "house"})
+	enRun, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "run"})
+	enLearn, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "learn"})
+	deHaus, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "de", Lemma: "haus"})
+
+	// User 1: house known, run mastered, learn learning, haus known (other language).
+	for _, s := range []struct {
+		wid int64
+		st  dictionary.WordStatus
+	}{
+		{enHouse, dictionary.StatusKnown},
+		{enRun, dictionary.StatusMastered},
+		{enLearn, dictionary.StatusLearning},
+		{deHaus, dictionary.StatusKnown},
+	} {
+		if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{
+			UserID: 1, DictionaryWordID: s.wid, Status: s.st,
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	got, err := statuses.KnownLemmas(ctx, db, 1, "en")
+	if err != nil {
+		t.Fatalf("KnownLemmas: %v", err)
+	}
+	want := []string{"house", "run"}
+	if len(got) != len(want) {
+		t.Fatalf("len mismatch: got %v, want %v", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("at %d: got %q want %q (full got=%v)", i, got[i], want[i], got)
+		}
+	}
+
+	// Other user has no status rows → empty result.
+	other, err := statuses.KnownLemmas(ctx, db, 2, "en")
+	if err != nil {
+		t.Fatalf("KnownLemmas other: %v", err)
+	}
+	if len(other) != 0 {
+		t.Fatalf("expected empty for user 2, got %v", other)
+	}
+}
+
+func TestUserWordStatus_GetMany(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	w1, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "alpha"})
+	w2, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "bravo"})
+	w3, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "charlie"})
+
+	if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{UserID: 1, DictionaryWordID: w1, Status: dictionary.StatusKnown}); err != nil {
+		t.Fatal(err)
+	}
+	if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{UserID: 1, DictionaryWordID: w2, Status: dictionary.StatusSkipped}); err != nil {
+		t.Fatal(err)
+	}
+	// w3 intentionally has no row.
+
+	got, err := statuses.GetMany(ctx, db, 1, []int64{w1, w2, w3})
+	if err != nil {
+		t.Fatalf("GetMany: %v", err)
+	}
+	if got[w1] != dictionary.StatusKnown || got[w2] != dictionary.StatusSkipped {
+		t.Fatalf("unexpected statuses: %v", got)
+	}
+	if _, ok := got[w3]; ok {
+		t.Fatalf("w3 should be absent, got %v", got)
+	}
+
+	// Empty input → empty map, no error.
+	empty, err := statuses.GetMany(ctx, db, 1, nil)
+	if err != nil {
+		t.Fatalf("GetMany empty: %v", err)
+	}
+	if len(empty) != 0 {
+		t.Fatalf("expected empty, got %v", empty)
+	}
+}
+
 func TestUserWordStatus_Upsert(t *testing.T) {
 	db := newTestDB(t)
 	dict := dictionary.NewSQLiteRepository(db)

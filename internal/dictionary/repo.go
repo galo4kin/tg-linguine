@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"strings"
 )
 
 var ErrNotFound = errors.New("dictionary: not found")
@@ -60,6 +61,14 @@ type UserWordStatusRepository interface {
 	Upsert(ctx context.Context, q DBTX, s UserWordStatus) error
 	// Get returns the status row, or ErrNotFound.
 	Get(ctx context.Context, q DBTX, userID, wordID int64) (*UserWordStatus, error)
+	// GetMany returns the per-word status for the given user, keyed by
+	// dictionary_word_id. Words without a status row are absent from the map
+	// (the caller should treat them as the implicit default).
+	GetMany(ctx context.Context, q DBTX, userID int64, wordIDs []int64) (map[int64]WordStatus, error)
+	// KnownLemmas returns the lemmas of words the user has marked as known
+	// or mastered for a given target language, sorted alphabetically. These
+	// lemmas are passed to the LLM so it skips re-introducing them.
+	KnownLemmas(ctx context.Context, q DBTX, userID int64, languageCode string) ([]string, error)
 }
 
 type sqliteRepo struct{ db *sql.DB }
@@ -176,6 +185,71 @@ func (r *sqliteStatusRepo) Upsert(ctx context.Context, q DBTX, s UserWordStatus)
 		return fmt.Errorf("dictionary: upsert status: %w", err)
 	}
 	return nil
+}
+
+func (r *sqliteStatusRepo) GetMany(ctx context.Context, q DBTX, userID int64, wordIDs []int64) (map[int64]WordStatus, error) {
+	out := make(map[int64]WordStatus, len(wordIDs))
+	if len(wordIDs) == 0 {
+		return out, nil
+	}
+	placeholders := make([]string, len(wordIDs))
+	args := make([]any, 0, len(wordIDs)+1)
+	args = append(args, userID)
+	for i, id := range wordIDs {
+		placeholders[i] = "?"
+		args = append(args, id)
+	}
+	stmt := `
+		SELECT dictionary_word_id, status
+		FROM user_word_status
+		WHERE user_id = ? AND dictionary_word_id IN (` + strings.Join(placeholders, ",") + `)
+	`
+	rows, err := q.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: status get many: %w", err)
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id int64
+		var status string
+		if err := rows.Scan(&id, &status); err != nil {
+			return nil, fmt.Errorf("dictionary: scan status: %w", err)
+		}
+		out[id] = WordStatus(status)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dictionary: iter statuses: %w", err)
+	}
+	return out, nil
+}
+
+func (r *sqliteStatusRepo) KnownLemmas(ctx context.Context, q DBTX, userID int64, languageCode string) ([]string, error) {
+	const stmt = `
+		SELECT dw.lemma
+		FROM user_word_status uws
+		JOIN dictionary_words dw ON dw.id = uws.dictionary_word_id
+		WHERE uws.user_id = ?
+		  AND dw.language_code = ?
+		  AND uws.status IN ('known', 'mastered')
+		ORDER BY dw.lemma
+	`
+	rows, err := q.QueryContext(ctx, stmt, userID, languageCode)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: known lemmas: %w", err)
+	}
+	defer rows.Close()
+	var out []string
+	for rows.Next() {
+		var lemma string
+		if err := rows.Scan(&lemma); err != nil {
+			return nil, fmt.Errorf("dictionary: scan known lemma: %w", err)
+		}
+		out = append(out, lemma)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dictionary: iter known lemmas: %w", err)
+	}
+	return out, nil
 }
 
 func (r *sqliteStatusRepo) Get(ctx context.Context, q DBTX, userID, wordID int64) (*UserWordStatus, error) {

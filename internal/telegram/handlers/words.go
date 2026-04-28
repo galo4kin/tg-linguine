@@ -19,51 +19,65 @@ import (
 
 const wordsPageSize = 5
 
-// Words handles the inline pagination of an article's word list, opened
-// from the article card's "Show all words" button.
+// CallbackPrefixWords drives pagination of the words list opened from the
+// article card.
+const CallbackPrefixWords = "words:"
+
+// CallbackPrefixWordStatus drives per-word status updates ("Знаю / Учу /
+// Пропустить") rendered inside the same paginated message. The payload
+// carries article and page so that the message can be re-rendered without
+// extra DB lookups: wstat:<article_id>:<page>:<dictionary_word_id>:<status>.
+const CallbackPrefixWordStatus = "wstat:"
+
+// Words handles the inline pagination of an article's word list and the
+// per-word status buttons (known / learning / skipped) that live in the
+// same message.
 type Words struct {
 	users    *users.Service
 	articles articles.Repository
 	awords   dictionary.ArticleWordsRepository
+	statuses dictionary.UserWordStatusRepository
 	bundle   *goi18n.Bundle
 	log      *slog.Logger
 	db       *sql.DB
 }
 
-// NewWords builds the handler. db is used for read queries; writes (which
-// the pagination handler does not perform) go through the repos themselves.
+// NewWords builds the handler. db is used for read queries; status writes
+// go through the status repo directly (single-row upserts, no transaction).
 func NewWords(
 	svc *users.Service,
 	articleRepo articles.Repository,
 	awords dictionary.ArticleWordsRepository,
+	statuses dictionary.UserWordStatusRepository,
 	db *sql.DB,
 	bundle *goi18n.Bundle,
 	log *slog.Logger,
 ) *Words {
-	return &Words{users: svc, articles: articleRepo, awords: awords, db: db, bundle: bundle, log: log}
+	return &Words{
+		users:    svc,
+		articles: articleRepo,
+		awords:   awords,
+		statuses: statuses,
+		db:       db,
+		bundle:   bundle,
+		log:      log,
+	}
 }
 
+// HandleCallback drives the pagination prefix `words:`.
 func (h *Words) HandleCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
 	cq := update.CallbackQuery
 	if cq == nil {
 		return
 	}
-
-	// Always answer the callback to dismiss the loading spinner on the client.
 	defer func() {
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cq.ID})
 	}()
 
-	from := cq.From
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("words cb: register", "err", err)
+	u, loc, ok := h.resolveUser(ctx, cq)
+	if !ok {
 		return
 	}
-	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
-
 	chatID, msgID, ok := callbackMessageRef(cq)
 	if !ok {
 		return
@@ -75,7 +89,6 @@ func (h *Words) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 		return
 	}
 	if data == "noop" {
-		// Disabled-edge buttons; just dismiss the spinner (handled by deferred answer).
 		return
 	}
 
@@ -84,21 +97,100 @@ func (h *Words) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 		h.log.Warn("words cb: bad payload", "data", cq.Data, "err", err)
 		return
 	}
+	h.renderPage(ctx, b, u.ID, loc, chatID, msgID, articleID, page)
+}
 
-	// Verify the article belongs to the user.
+// HandleStatusCallback drives the per-word `wstat:` prefix. It upserts the
+// user's status for the word, answers the callback with a short toast, and
+// re-renders the page so that the selected button visually reflects the new
+// state.
+func (h *Words) HandleStatusCallback(ctx context.Context, b *bot.Bot, update *models.Update) {
+	cq := update.CallbackQuery
+	if cq == nil {
+		return
+	}
+	answered := false
+	answer := func(text string) {
+		if answered {
+			return
+		}
+		answered = true
+		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{
+			CallbackQueryID: cq.ID,
+			Text:            text,
+		})
+	}
+	defer func() {
+		if !answered {
+			b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cq.ID})
+		}
+	}()
+
+	u, loc, ok := h.resolveUser(ctx, cq)
+	if !ok {
+		return
+	}
+	chatID, msgID, ok := callbackMessageRef(cq)
+	if !ok {
+		return
+	}
+
+	payload := strings.TrimPrefix(cq.Data, CallbackPrefixWordStatus)
+	articleID, page, wordID, status, err := parseWordStatusPayload(payload)
+	if err != nil {
+		h.log.Warn("wstat cb: bad payload", "data", cq.Data, "err", err)
+		return
+	}
+
 	article, err := h.articles.ByID(ctx, h.db, articleID)
 	if err != nil {
-		h.log.Warn("words cb: article load", "article_id", articleID, "err", err)
+		h.log.Warn("wstat cb: article load", "article_id", articleID, "err", err)
 		return
 	}
 	if article.UserID != u.ID {
-		h.log.Warn("words cb: article ownership mismatch", "article_id", articleID, "user_id", u.ID)
+		h.log.Warn("wstat cb: article ownership mismatch", "article_id", articleID, "user_id", u.ID)
+		return
+	}
+
+	if err := h.statuses.Upsert(ctx, h.db, dictionary.UserWordStatus{
+		UserID:           u.ID,
+		DictionaryWordID: wordID,
+		Status:           status,
+	}); err != nil {
+		h.log.Error("wstat cb: upsert", "err", err)
+		return
+	}
+
+	answer(tgi18n.T(loc, statusConfirmKey(status), nil))
+	h.renderPage(ctx, b, u.ID, loc, chatID, msgID, articleID, page)
+}
+
+func (h *Words) resolveUser(ctx context.Context, cq *models.CallbackQuery) (*users.User, *goi18n.Localizer, bool) {
+	from := cq.From
+	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
+		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
+	})
+	if err != nil {
+		h.log.Error("words cb: register", "err", err)
+		return nil, nil, false
+	}
+	return u, tgi18n.For(h.bundle, u.InterfaceLanguage), true
+}
+
+func (h *Words) renderPage(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int, articleID int64, page int) {
+	article, err := h.articles.ByID(ctx, h.db, articleID)
+	if err != nil {
+		h.log.Warn("words render: article load", "article_id", articleID, "err", err)
+		return
+	}
+	if article.UserID != userID {
+		h.log.Warn("words render: article ownership mismatch", "article_id", articleID, "user_id", userID)
 		return
 	}
 
 	total, err := h.awords.CountByArticle(ctx, h.db, articleID)
 	if err != nil {
-		h.log.Error("words cb: count", "err", err)
+		h.log.Error("words render: count", "err", err)
 		return
 	}
 	if total == 0 {
@@ -120,19 +212,29 @@ func (h *Words) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 
 	views, err := h.awords.PageByArticle(ctx, h.db, articleID, wordsPageSize, page*wordsPageSize)
 	if err != nil {
-		h.log.Error("words cb: page", "err", err)
+		h.log.Error("words render: page", "err", err)
+		return
+	}
+
+	wordIDs := make([]int64, len(views))
+	for i, v := range views {
+		wordIDs[i] = v.DictionaryWordID
+	}
+	statusByWord, err := h.statuses.GetMany(ctx, h.db, userID, wordIDs)
+	if err != nil {
+		h.log.Error("words render: statuses", "err", err)
 		return
 	}
 
 	text := renderWordsPage(loc, views, page, totalPages)
-	markup := wordsKeyboard(loc, articleID, page, totalPages)
+	markup := wordsKeyboard(loc, articleID, page, totalPages, views, statusByWord)
 
 	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID: chatID, MessageID: msgID,
 		Text:        text,
 		ReplyMarkup: markup,
 	}); err != nil {
-		h.log.Debug("words cb: edit", "err", err)
+		h.log.Debug("words render: edit", "err", err)
 	}
 }
 
@@ -152,27 +254,81 @@ func parseWordsPayload(s string) (articleID int64, page int, err error) {
 	return id, p, nil
 }
 
+// parseWordStatusPayload decodes `<article_id>:<page>:<word_id>:<status>`.
+// Status is restricted to one of the three buttons exposed in the keyboard
+// (known / learning / skipped).
+func parseWordStatusPayload(s string) (articleID int64, page int, wordID int64, status dictionary.WordStatus, err error) {
+	parts := strings.Split(s, ":")
+	if len(parts) != 4 {
+		return 0, 0, 0, "", fmt.Errorf("expected 4 parts, got %d", len(parts))
+	}
+	aid, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil {
+		return 0, 0, 0, "", fmt.Errorf("article id: %w", err)
+	}
+	p, err := strconv.Atoi(parts[1])
+	if err != nil {
+		return 0, 0, 0, "", fmt.Errorf("page: %w", err)
+	}
+	wid, err := strconv.ParseInt(parts[2], 10, 64)
+	if err != nil {
+		return 0, 0, 0, "", fmt.Errorf("word id: %w", err)
+	}
+	st := dictionary.WordStatus(parts[3])
+	switch st {
+	case dictionary.StatusKnown, dictionary.StatusLearning, dictionary.StatusSkipped:
+	default:
+		return 0, 0, 0, "", fmt.Errorf("status: %q", parts[3])
+	}
+	return aid, p, wid, st, nil
+}
+
+func statusConfirmKey(s dictionary.WordStatus) string {
+	switch s {
+	case dictionary.StatusKnown:
+		return "wstat.confirm.known"
+	case dictionary.StatusLearning:
+		return "wstat.confirm.learning"
+	case dictionary.StatusSkipped:
+		return "wstat.confirm.skipped"
+	}
+	return "wstat.confirm.learning"
+}
+
 func renderWordsPage(loc *goi18n.Localizer, views []dictionary.ArticleWordView, page, totalPages int) string {
 	var sb strings.Builder
 	sb.WriteString(tgi18n.T(loc, "words.page_header", map[string]int{"Page": page + 1, "Total": totalPages}))
 	sb.WriteString("\n\n")
-	for _, v := range views {
-		fmt.Fprintf(&sb, "• %s (%s, %s) [%s]\n", v.SurfaceForm, v.Lemma, v.POS, v.TranscriptionIPA)
+	for i, v := range views {
+		fmt.Fprintf(&sb, "%d. %s (%s, %s) [%s]\n", i+1, v.SurfaceForm, v.Lemma, v.POS, v.TranscriptionIPA)
 		if v.TranslationNative != "" {
-			fmt.Fprintf(&sb, "  → %s\n", v.TranslationNative)
+			fmt.Fprintf(&sb, "   → %s\n", v.TranslationNative)
 		}
 		if v.ExampleTarget != "" {
-			fmt.Fprintf(&sb, "  %s\n", v.ExampleTarget)
+			fmt.Fprintf(&sb, "   %s\n", v.ExampleTarget)
 		}
 		if v.ExampleNative != "" {
-			fmt.Fprintf(&sb, "  %s\n", v.ExampleNative)
+			fmt.Fprintf(&sb, "   %s\n", v.ExampleNative)
 		}
 		sb.WriteString("\n")
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func wordsKeyboard(loc *goi18n.Localizer, articleID int64, page, totalPages int) *models.InlineKeyboardMarkup {
+func wordsKeyboard(
+	loc *goi18n.Localizer,
+	articleID int64,
+	page, totalPages int,
+	views []dictionary.ArticleWordView,
+	statusByWord map[int64]dictionary.WordStatus,
+) *models.InlineKeyboardMarkup {
+	rows := make([][]models.InlineKeyboardButton, 0, len(views)+2)
+
+	for i, v := range views {
+		current := statusByWord[v.DictionaryWordID]
+		rows = append(rows, statusRow(loc, articleID, page, i+1, v.DictionaryWordID, current))
+	}
+
 	prevText := tgi18n.T(loc, "words.btn.prev", nil)
 	nextText := tgi18n.T(loc, "words.btn.next", nil)
 	closeText := tgi18n.T(loc, "words.btn.close", nil)
@@ -191,11 +347,36 @@ func wordsKeyboard(loc *goi18n.Localizer, articleID int64, page, totalPages int)
 	}
 	closeBtn := models.InlineKeyboardButton{Text: closeText, CallbackData: CallbackPrefixWords + "close"}
 
-	return &models.InlineKeyboardMarkup{
-		InlineKeyboard: [][]models.InlineKeyboardButton{
-			{prev, next},
-			{closeBtn},
-		},
+	rows = append(rows, []models.InlineKeyboardButton{prev, next})
+	rows = append(rows, []models.InlineKeyboardButton{closeBtn})
+
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
+}
+
+func statusRow(loc *goi18n.Localizer, articleID int64, page, index int, wordID int64, current dictionary.WordStatus) []models.InlineKeyboardButton {
+	return []models.InlineKeyboardButton{
+		statusButton(loc, articleID, page, index, wordID, dictionary.StatusKnown, current, "wstat.btn.known"),
+		statusButton(loc, articleID, page, index, wordID, dictionary.StatusLearning, current, "wstat.btn.learning"),
+		statusButton(loc, articleID, page, index, wordID, dictionary.StatusSkipped, current, "wstat.btn.skipped"),
+	}
+}
+
+func statusButton(
+	loc *goi18n.Localizer,
+	articleID int64,
+	page, index int,
+	wordID int64,
+	status, current dictionary.WordStatus,
+	labelKey string,
+) models.InlineKeyboardButton {
+	label := tgi18n.T(loc, labelKey, map[string]int{"Index": index})
+	if current == status {
+		label = "✓ " + label
+	}
+	return models.InlineKeyboardButton{
+		Text: label,
+		CallbackData: fmt.Sprintf("%s%d:%d:%d:%s",
+			CallbackPrefixWordStatus, articleID, page, wordID, status),
 	}
 }
 

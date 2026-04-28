@@ -100,6 +100,7 @@ func main() {
 		Articles:     articleSvc,
 		ArticleRepo:  articleRepo,
 		ArticleWords: articleWordsRepo,
+		WordStatuses: statusRepo,
 		DB:           db,
 	})
 	if err != nil {

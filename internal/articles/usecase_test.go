@@ -27,12 +27,14 @@ func (s stubExtractor) Extract(ctx context.Context, url string) (articles.Extrac
 }
 
 type stubLLM struct {
-	resp llm.AnalyzeResponse
-	err  error
+	resp        llm.AnalyzeResponse
+	err         error
+	lastRequest *llm.AnalyzeRequest
 }
 
-func (s stubLLM) ValidateAPIKey(ctx context.Context, key string) error { return nil }
-func (s stubLLM) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest) (llm.AnalyzeResponse, error) {
+func (s *stubLLM) ValidateAPIKey(ctx context.Context, key string) error { return nil }
+func (s *stubLLM) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest) (llm.AnalyzeResponse, error) {
+	s.lastRequest = &req
 	return s.resp, s.err
 }
 
@@ -111,7 +113,7 @@ func TestAnalyzeArticle_HappyPath(t *testing.T) {
 		Languages:    langs,
 		Keys:         keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://x", NormalizedURL: "https://x", URLHash: "h", Title: "Title", Content: "body content body content", Lang: "en"}},
-		LLM:          stubLLM{resp: sampleResponse()},
+		LLM:          &stubLLM{resp: sampleResponse()},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -163,7 +165,7 @@ func TestAnalyzeArticle_NoLanguage(t *testing.T) {
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{},
-		LLM:          stubLLM{},
+		LLM:          &stubLLM{},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -186,7 +188,7 @@ func TestAnalyzeArticle_NoAPIKey(t *testing.T) {
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{},
-		LLM:          stubLLM{},
+		LLM:          &stubLLM{},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -212,7 +214,7 @@ func TestAnalyzeArticle_LLMError(t *testing.T) {
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://x", URLHash: "h", Title: "t", Content: "c"}},
-		LLM:          stubLLM{err: llm.ErrRateLimited},
+		LLM:          &stubLLM{err: llm.ErrRateLimited},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -228,5 +230,94 @@ func TestAnalyzeArticle_LLMError(t *testing.T) {
 	db.QueryRow(`SELECT COUNT(*) FROM articles`).Scan(&n)
 	if n != 0 {
 		t.Fatalf("articles persisted on LLM error: %d", n)
+	}
+}
+
+// TestAnalyzeArticle_KnownWordsForwarded asserts the integration of step 15:
+// once the user has marked a word as `known`, a subsequent call to
+// AnalyzeArticle for the same target language receives that lemma in
+// KnownWords so the LLM can exclude it from the next analysis.
+func TestAnalyzeArticle_KnownWordsForwarded(t *testing.T) {
+	db := newServiceTestDB(t)
+	cipher := newCipher(t)
+
+	usersSvc := users.NewService(users.NewSQLiteRepository(db))
+	langs := users.NewSQLiteUserLanguageRepository(db)
+	keys := users.NewSQLiteAPIKeyRepository(db, cipher)
+
+	userID := seedUserAndKey(t, db)
+	if err := keys.Set(context.Background(), userID, users.ProviderGroq, "gsk_test"); err != nil {
+		t.Fatalf("set key: %v", err)
+	}
+
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+
+	llmStub := &stubLLM{resp: sampleResponse()}
+	svc := articles.NewService(articles.ServiceDeps{
+		DB:           db,
+		Users:        usersSvc,
+		Languages:    langs,
+		Keys:         keys,
+		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://a", NormalizedURL: "https://a", URLHash: "ha", Title: "T1", Content: "body"}},
+		LLM:          llmStub,
+		Articles:     articles.NewSQLiteRepository(db),
+		Dictionary:   dictionary.NewSQLiteRepository(db),
+		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
+		Statuses:     statuses,
+		Log:          slog.New(slog.NewTextHandler(discardWriter{}, nil)),
+	})
+
+	first, err := svc.AnalyzeArticle(context.Background(), userID, "https://a", nil)
+	if err != nil {
+		t.Fatalf("first analyze: %v", err)
+	}
+	if llmStub.lastRequest == nil || len(llmStub.lastRequest.KnownWords) != 0 {
+		t.Fatalf("first call should send empty KnownWords, got %+v", llmStub.lastRequest)
+	}
+
+	// Mark "ipsum" as known and "lorem" as mastered for this user.
+	if len(first.Words) != 2 {
+		t.Fatalf("expected 2 stored words, got %d", len(first.Words))
+	}
+	if err := statuses.Upsert(context.Background(), db, dictionary.UserWordStatus{
+		UserID: userID, DictionaryWordID: first.Words[0].ID, Status: dictionary.StatusKnown,
+	}); err != nil {
+		t.Fatalf("upsert known: %v", err)
+	}
+	if err := statuses.Upsert(context.Background(), db, dictionary.UserWordStatus{
+		UserID: userID, DictionaryWordID: first.Words[1].ID, Status: dictionary.StatusMastered,
+	}); err != nil {
+		t.Fatalf("upsert mastered: %v", err)
+	}
+
+	// Second analyze of a different URL — known lemmas must be forwarded.
+	svc2 := articles.NewService(articles.ServiceDeps{
+		DB:           db,
+		Users:        usersSvc,
+		Languages:    langs,
+		Keys:         keys,
+		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://b", NormalizedURL: "https://b", URLHash: "hb", Title: "T2", Content: "other body"}},
+		LLM:          llmStub,
+		Articles:     articles.NewSQLiteRepository(db),
+		Dictionary:   dictionary.NewSQLiteRepository(db),
+		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
+		Statuses:     statuses,
+		Log:          slog.New(slog.NewTextHandler(discardWriter{}, nil)),
+	})
+	if _, err := svc2.AnalyzeArticle(context.Background(), userID, "https://b", nil); err != nil {
+		t.Fatalf("second analyze: %v", err)
+	}
+	if llmStub.lastRequest == nil {
+		t.Fatalf("second call did not reach LLM")
+	}
+	got := llmStub.lastRequest.KnownWords
+	want := map[string]bool{"ipsum": true, "lorem": true}
+	if len(got) != len(want) {
+		t.Fatalf("KnownWords len: got %v want %v", got, want)
+	}
+	for _, lemma := range got {
+		if !want[lemma] {
+			t.Fatalf("unexpected known lemma %q (got=%v)", lemma, got)
+		}
 	}
 }
