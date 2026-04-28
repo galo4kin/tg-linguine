@@ -19,6 +19,19 @@ import (
 // later instead of pinning a Telegram handler goroutine for minutes.
 const maxRetryAfter = 60 * time.Second
 
+// retryAfterBuffer is added to Groq's parsed Retry-After hint before
+// sleeping. Groq's number sometimes underestimates by a fraction of a
+// second — the precision is fine, but the rolling-minute window has not
+// quite slid by the time the retry lands. A small buffer keeps a single
+// retry sufficient in practice.
+const retryAfterBuffer = 750 * time.Millisecond
+
+// maxRateLimitAttempts caps the total number of attempts (initial + retries)
+// per chat call. Free-tier Groq sometimes needs two retries when summarize
+// and analyze land in the same TPM minute; four attempts gives us room to
+// recover without ever waiting longer than maxRetryAfter cumulatively.
+const maxRateLimitAttempts = 4
+
 // retryAfterBodyRe pulls a "try again in N.NNs" hint out of Groq's 429
 // JSON body. Groq encodes the precise wait time there (their docs use the
 // same wording for all rate-limit messages), and it's more accurate than

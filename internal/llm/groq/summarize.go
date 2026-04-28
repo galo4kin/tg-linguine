@@ -60,21 +60,26 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 		return "", fmt.Errorf("groq: marshal request: %w", err)
 	}
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < maxRateLimitAttempts; attempt++ {
 		out, retryAfter, err := c.chatPlainTextOnce(ctx, key, body)
 		if err == nil {
 			return out, nil
 		}
-		if attempt == 0 && retryAfter > 0 {
+		if attempt < maxRateLimitAttempts-1 && retryAfter > 0 {
+			wait := retryAfter + retryAfterBuffer
+			if wait > maxRetryAfter {
+				wait = maxRetryAfter
+			}
 			if c.log != nil {
 				c.log.Info("groq.summarize rate-limit retry",
-					"wait_ms", retryAfter.Milliseconds(),
+					"attempt", attempt+1,
+					"wait_ms", wait.Milliseconds(),
 				)
 			}
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
-			case <-time.After(retryAfter):
+			case <-time.After(wait):
 			}
 			continue
 		}

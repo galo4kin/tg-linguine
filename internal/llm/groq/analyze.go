@@ -119,24 +119,29 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		return nil, fmt.Errorf("groq: marshal request: %w", err)
 	}
 
-	for attempt := 0; attempt < 2; attempt++ {
+	for attempt := 0; attempt < maxRateLimitAttempts; attempt++ {
 		raw, retryAfter, err := c.chatOnce(ctx, key, body)
 		if err == nil {
 			return raw, nil
 		}
-		// Only the first attempt is allowed to honor a Retry-After hint.
-		// If the second attempt also rate-limits, surface it to the user
-		// so the Telegram layer can edit the status to "rate limited".
-		if attempt == 0 && retryAfter > 0 {
+		// Honor Groq's Retry-After up to maxRateLimitAttempts-1 times.
+		// The final attempt's failure surfaces ErrRateLimited so the
+		// Telegram layer can edit the status to "rate limited".
+		if attempt < maxRateLimitAttempts-1 && retryAfter > 0 {
+			wait := retryAfter + retryAfterBuffer
+			if wait > maxRetryAfter {
+				wait = maxRetryAfter
+			}
 			if c.log != nil {
 				c.log.Info("groq.chat rate-limit retry",
-					"wait_ms", retryAfter.Milliseconds(),
+					"attempt", attempt+1,
+					"wait_ms", wait.Milliseconds(),
 				)
 			}
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
-			case <-time.After(retryAfter):
+			case <-time.After(wait):
 			}
 			continue
 		}
