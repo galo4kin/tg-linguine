@@ -143,6 +143,13 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 	result, err := h.articles.AnalyzeArticle(ctx, u.ID, url, progress)
 	if err != nil {
 		h.log.Warn("url: analyze failed", "user_id", u.ID, "err", err)
+		var tooLong *articles.TooLongError
+		if errors.As(err, &tooLong) {
+			editStatus(tgi18n.T(loc, "article.err.too_long", map[string]int{
+				"Words": tooLong.Words,
+			}))
+			return
+		}
 		editStatus(tgi18n.T(loc, articleErrorMessageID(err), nil))
 		return
 	}

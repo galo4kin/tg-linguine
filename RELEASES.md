@@ -1,5 +1,16 @@
 # Releases
 
+## 26 — long-articles
+Перед обращением к Groq статьи теперь проходят токен-гейт: эвристика
+`EstimateTokens = ⌈runes/4⌉` сравнивается с
+`MAX_TOKENS_PER_ARTICLE` (дефолт 7000). При превышении возвращаем
+типизированный `*TooLongError` (с `Tokens/Words/Limit`), пишем в лог
+`tokens_estimated/words_estimated/reason=exceeds_token_budget` и шлём
+пользователю `article.err.too_long` с приблизительным числом слов;
+LLM в этом случае не вызывается. Граничный случай (estimate == limit)
+проходит. Покрыто sqlite-тестами на отказ, границу и работу
+дефолтного лимита.
+
 ## 25 — rate-limit
 В транспортном слое появился per-user token-bucket
 `internal/telegram/ratelimit.go` (capacity=`RATE_LIMIT_PER_HOUR`,

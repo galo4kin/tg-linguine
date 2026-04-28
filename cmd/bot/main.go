@@ -88,6 +88,7 @@ func main() {
 		Dictionary:   dictRepo,
 		ArticleWords: articleWordsRepo,
 		Statuses:     statusRepo,
+		MaxTokens:    cfg.MaxTokensPerArticle,
 		Log:          log,
 	})
 

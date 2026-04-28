@@ -19,7 +19,78 @@ var (
 	ErrNoAPIKey         = errors.New("articles: user has no api key")
 	ErrNoSourceText     = errors.New("articles: no adapted text to use as regen source")
 	ErrUnknownCEFR      = errors.New("articles: unknown cefr level")
+	// ErrTooLong is raised when the extracted article exceeds the configured
+	// per-article token budget. The check fires BEFORE the LLM is called, so
+	// the user pays nothing for an article we cannot reasonably analyze.
+	// Returned wrapped in a *TooLongError so callers can read the estimated
+	// word count for a friendlier rejection message.
+	ErrTooLong = errors.New("articles: article exceeds token budget")
 )
+
+// TooLongError carries the estimated counts behind ErrTooLong so the
+// Telegram layer can render a localized "~N words" hint without re-walking
+// the article body. Use errors.As(err, &t) to retrieve.
+type TooLongError struct {
+	Tokens int
+	Words  int
+	Limit  int
+}
+
+func (e *TooLongError) Error() string {
+	return fmt.Sprintf("articles: too long: tokens=%d words=%d limit=%d", e.Tokens, e.Words, e.Limit)
+}
+
+func (e *TooLongError) Is(target error) bool {
+	return target == ErrTooLong
+}
+
+// DefaultMaxTokensPerArticle is the fallback used when ServiceDeps.MaxTokens
+// is left at zero. 7000 leaves room for the prompt scaffolding within an
+// 8k-context model — see _10_todo/26-long-articles.md.
+const DefaultMaxTokensPerArticle = 7000
+
+// EstimateTokens is the heuristic used by AnalyzeArticle to gate
+// over-long articles before they reach the LLM. We deliberately stay
+// CGO-free, so instead of pulling in tiktoken we count runes and divide
+// by 4 — empirically close enough for English/Spanish/Russian prose
+// (within ~15% of the BPE count) and never under-counts in a way that
+// would let an 8k-context model OOM the prompt.
+func EstimateTokens(text string) int {
+	if text == "" {
+		return 0
+	}
+	runes := 0
+	for range text {
+		runes++
+	}
+	tokens := runes / 4
+	if runes%4 != 0 {
+		tokens++
+	}
+	return tokens
+}
+
+// ApproxWordCount is purely for the user-facing rejection message — we tell
+// the user how many words their article is so they have a sense of how much
+// to trim. strings.Fields gives a good-enough split for any whitespace.
+func ApproxWordCount(text string) int {
+	if text == "" {
+		return 0
+	}
+	count := 0
+	inWord := false
+	for _, r := range text {
+		if r == ' ' || r == '\t' || r == '\n' || r == '\r' {
+			inWord = false
+			continue
+		}
+		if !inWord {
+			count++
+			inWord = true
+		}
+	}
+	return count
+}
 
 // Stage notifies the caller of progress; used by the Telegram handler to
 // edit the status message between long-running steps.
@@ -53,6 +124,7 @@ type Service struct {
 	dict      dictionary.Repository
 	awords    dictionary.ArticleWordsRepository
 	statuses  dictionary.UserWordStatusRepository
+	maxTokens int
 	log       *slog.Logger
 }
 
@@ -67,15 +139,23 @@ type ServiceDeps struct {
 	Dictionary   dictionary.Repository
 	ArticleWords dictionary.ArticleWordsRepository
 	Statuses     dictionary.UserWordStatusRepository
-	Log          *slog.Logger
+	// MaxTokens caps the estimated token count of an article before we
+	// invoke the LLM. Zero means use DefaultMaxTokensPerArticle.
+	MaxTokens int
+	Log       *slog.Logger
 }
 
 func NewService(d ServiceDeps) *Service {
+	maxTokens := d.MaxTokens
+	if maxTokens <= 0 {
+		maxTokens = DefaultMaxTokensPerArticle
+	}
 	return &Service{
 		db: d.DB, users: d.Users, languages: d.Languages, keys: d.Keys,
 		extractor: d.Extractor, llm: d.LLM,
 		articles: d.Articles, dict: d.Dictionary, awords: d.ArticleWords, statuses: d.Statuses,
-		log: d.Log,
+		maxTokens: maxTokens,
+		log:       d.Log,
 	}
 }
 
@@ -137,6 +217,25 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 	extracted, err := s.extractor.Extract(ctx, url)
 	if err != nil {
 		return nil, err
+	}
+
+	// Token-budget gate: bail out before spending Groq tokens on something
+	// the model cannot fit anyway. The boundary case (estimate == limit) is
+	// allowed — only strictly-greater values are rejected.
+	tokensEstimated := EstimateTokens(extracted.Content)
+	if tokensEstimated > s.maxTokens {
+		words := ApproxWordCount(extracted.Content)
+		if s.log != nil {
+			s.log.Info("article rejected: too long",
+				"user_id", userID,
+				"url", url,
+				"tokens_estimated", tokensEstimated,
+				"tokens_limit", s.maxTokens,
+				"words_estimated", words,
+				"reason", "exceeds_token_budget",
+			)
+		}
+		return nil, &TooLongError{Tokens: tokensEstimated, Words: words, Limit: s.maxTokens}
 	}
 
 	knownLemmas, err := s.statuses.KnownLemmas(ctx, s.db, userID, active.LanguageCode)

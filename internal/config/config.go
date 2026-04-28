@@ -19,6 +19,7 @@ type Config struct {
 	LogMaxAgeDays   int    `env:"LOG_MAX_AGE_DAYS"   envDefault:"30"`
 	LogStdout       bool   `env:"LOG_STDOUT"         envDefault:"false"`
 	RateLimitPerHour int   `env:"RATE_LIMIT_PER_HOUR" envDefault:"10"`
+	MaxTokensPerArticle int `env:"MAX_TOKENS_PER_ARTICLE" envDefault:"7000"`
 }
 
 func Load() (*Config, error) {

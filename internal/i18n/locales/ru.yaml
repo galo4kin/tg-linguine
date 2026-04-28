@@ -25,6 +25,7 @@ article.err.not_article: "По этой ссылке я не нашёл связ
 article.err.paywall: "Похоже, статья за paywall."
 article.err.llm_format: "Модель вернула странный ответ. Попробуй ещё раз через минуту."
 article.err.rate_limited: "Лимит {{.Limit}} разборов статей в час исчерпан. Попробуй через ~{{.Minutes}} мин."
+article.err.too_long: "Статья слишком длинная (~{{.Words}} слов). Попробуй покороче или возьми её часть."
 words.page_header: "Слова {{.Page}}/{{.Total}}"
 words.btn.prev: "◀ Назад"
 words.btn.next: "Вперёд ▶"
