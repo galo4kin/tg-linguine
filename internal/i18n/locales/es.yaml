@@ -34,6 +34,7 @@ article.long.banner.truncated: "📄 Analicé la primera parte (~{{.Percent}}%, 
 article.long.banner.summarized: "✂️ Resumí el artículo antes de analizarlo (originalmente ~{{.TotalWords}} palabras)."
 article.long.expired: "La elección expiró. Envíame el enlace otra vez."
 words.page_header: "Palabras {{.Page}}/{{.Total}}"
+words.header_single: "Palabras nuevas — {{.Total}}"
 words.btn.prev: "◀ Anterior"
 words.btn.next: "Siguiente ▶"
 words.btn.close: "Cerrar"

@@ -34,6 +34,7 @@ article.long.banner.truncated: "📄 Разобрана первая часть 
 article.long.banner.summarized: "✂️ Перед разбором статья была сжата (исходно ~{{.TotalWords}} слов)."
 article.long.expired: "Срок выбора истёк. Пришли ссылку ещё раз."
 words.page_header: "Слова {{.Page}}/{{.Total}}"
+words.header_single: "Новые слова — {{.Total}}"
 words.btn.prev: "◀ Назад"
 words.btn.next: "Вперёд ▶"
 words.btn.close: "Закрыть"

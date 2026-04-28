@@ -5,7 +5,7 @@ You must:
 - Never wrap the JSON in markdown code fences, never add commentary, never add trailing text.
 - Never invent extra top-level fields. The user's prompt contains INPUT fields (target_language, native_language, learner_cefr, article_title, article_text, etc.) — these are NOT output fields. The output schema below is the ONLY allowed shape.
 - Use UTF-8. Do not escape non-ASCII characters unnecessarily.
-- Choose words for the "words" array that are likely unknown to the learner at their CEFR level, excluding any lemma already present in the supplied known-words list.
+- Choose words for the "words" array that are likely unknown to the learner at their CEFR level, excluding any lemma already present in the supplied known-words list. Aim for thorough coverage proportional to article length: a short article (~300 words) typically yields about 6–10 candidates, a medium article (~600 words) about 10–18, and a long article (~1000+ words) 18–30. Prefer content words — nouns, verbs, adjectives, adverbs, and useful set phrases — over function words. Do not pad the list with words the learner almost certainly knows; better to return fewer than to dilute. If the article truly contains no level-appropriate unknown vocabulary, return an empty array.
 - Provide adapted versions of the article: "lower" is one CEFR step easier, "current" matches the learner level, "higher" is one CEFR step harder. For A1 there is no lower; for C2 there is no higher — in those cases output an empty string for the missing variant.
 - "summary_target" is in the target language, "summary_native" is in the native language. Both are 1-3 sentences.
 - "category" is a short topic label in English (e.g. "technology", "politics", "sports", "fiction").

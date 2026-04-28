@@ -187,6 +187,7 @@ func (h *Words) renderPage(ctx context.Context, b *bot.Bot, userID int64, loc *g
 		b.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID: chatID, MessageID: msgID,
 			Text:        tgi18n.T(loc, "words.empty", nil),
+			ParseMode:   models.ParseModeHTML,
 			ReplyMarkup: closeKeyboard(loc),
 		})
 		return
@@ -216,12 +217,13 @@ func (h *Words) renderPage(ctx context.Context, b *bot.Bot, userID int64, loc *g
 		return
 	}
 
-	text := renderWordsPage(loc, views, page, totalPages)
+	text := renderWordsPage(loc, views, page, totalPages, total)
 	markup := wordsKeyboard(loc, articleID, page, totalPages, views, statusByWord)
 
 	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID: chatID, MessageID: msgID,
 		Text:        text,
+		ParseMode:   models.ParseModeHTML,
 		ReplyMarkup: markup,
 	}); err != nil {
 		h.log.Debug("words render: edit", "err", err)
@@ -285,20 +287,47 @@ func statusConfirmKey(s dictionary.WordStatus) string {
 	return "wstat.confirm.learning"
 }
 
-func renderWordsPage(loc *goi18n.Localizer, views []dictionary.ArticleWordView, page, totalPages int) string {
+// htmlEscape escapes the three characters Telegram's HTML parse mode
+// requires: `&`, `<`, `>`. Order matters — `&` must come first.
+var htmlEscape = strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;").Replace
+
+func renderWordsPage(loc *goi18n.Localizer, views []dictionary.ArticleWordView, page, totalPages int, totalWords int) string {
 	var sb strings.Builder
-	sb.WriteString(tgi18n.T(loc, "words.page_header", map[string]int{"Page": page + 1, "Total": totalPages}))
+	if totalPages > 1 {
+		sb.WriteString("<b>")
+		sb.WriteString(htmlEscape(tgi18n.T(loc, "words.page_header", map[string]int{"Page": page + 1, "Total": totalPages})))
+		sb.WriteString("</b>")
+	} else {
+		sb.WriteString("<b>")
+		sb.WriteString(htmlEscape(tgi18n.T(loc, "words.header_single", map[string]int{"Total": totalWords})))
+		sb.WriteString("</b>")
+	}
 	sb.WriteString("\n\n")
 	for i, v := range views {
-		fmt.Fprintf(&sb, "%d. %s (%s, %s) [%s]\n", i+1, v.SurfaceForm, v.Lemma, v.POS, v.TranscriptionIPA)
+		fmt.Fprintf(&sb, "<b>%d. %s</b>", i+1, htmlEscape(v.SurfaceForm))
+		meta := ""
+		if v.Lemma != "" && v.POS != "" {
+			meta = fmt.Sprintf("%s, %s", v.Lemma, v.POS)
+		} else if v.Lemma != "" {
+			meta = v.Lemma
+		} else if v.POS != "" {
+			meta = v.POS
+		}
+		if meta != "" {
+			fmt.Fprintf(&sb, " · <i>%s</i>", htmlEscape(meta))
+		}
+		if v.TranscriptionIPA != "" {
+			fmt.Fprintf(&sb, " · <code>%s</code>", htmlEscape(v.TranscriptionIPA))
+		}
+		sb.WriteString("\n")
 		if v.TranslationNative != "" {
-			fmt.Fprintf(&sb, "   → %s\n", v.TranslationNative)
+			fmt.Fprintf(&sb, "→ <b>%s</b>\n", htmlEscape(v.TranslationNative))
 		}
 		if v.ExampleTarget != "" {
-			fmt.Fprintf(&sb, "   %s\n", v.ExampleTarget)
+			fmt.Fprintf(&sb, "<i>%s</i>\n", htmlEscape(v.ExampleTarget))
 		}
 		if v.ExampleNative != "" {
-			fmt.Fprintf(&sb, "   %s\n", v.ExampleNative)
+			fmt.Fprintf(&sb, "%s\n", htmlEscape(v.ExampleNative))
 		}
 		sb.WriteString("\n")
 	}
@@ -319,25 +348,25 @@ func wordsKeyboard(
 		rows = append(rows, statusRow(loc, articleID, page, i+1, v.DictionaryWordID, current))
 	}
 
-	prevText := tgi18n.T(loc, "words.btn.prev", nil)
-	nextText := tgi18n.T(loc, "words.btn.next", nil)
 	closeText := tgi18n.T(loc, "words.btn.close", nil)
 
-	prev := models.InlineKeyboardButton{Text: prevText}
-	next := models.InlineKeyboardButton{Text: nextText}
-	if page > 0 {
-		prev.CallbackData = fmt.Sprintf("%s%d:%d", CallbackPrefixWords, articleID, page-1)
-	} else {
-		prev.CallbackData = CallbackPrefixWords + "noop"
+	if totalPages > 1 {
+		prev := models.InlineKeyboardButton{Text: tgi18n.T(loc, "words.btn.prev", nil)}
+		next := models.InlineKeyboardButton{Text: tgi18n.T(loc, "words.btn.next", nil)}
+		if page > 0 {
+			prev.CallbackData = fmt.Sprintf("%s%d:%d", CallbackPrefixWords, articleID, page-1)
+		} else {
+			prev.CallbackData = CallbackPrefixWords + "noop"
+		}
+		if page < totalPages-1 {
+			next.CallbackData = fmt.Sprintf("%s%d:%d", CallbackPrefixWords, articleID, page+1)
+		} else {
+			next.CallbackData = CallbackPrefixWords + "noop"
+		}
+		rows = append(rows, []models.InlineKeyboardButton{prev, next})
 	}
-	if page < totalPages-1 {
-		next.CallbackData = fmt.Sprintf("%s%d:%d", CallbackPrefixWords, articleID, page+1)
-	} else {
-		next.CallbackData = CallbackPrefixWords + "noop"
-	}
-	closeBtn := models.InlineKeyboardButton{Text: closeText, CallbackData: CallbackPrefixWords + "close"}
 
-	rows = append(rows, []models.InlineKeyboardButton{prev, next})
+	closeBtn := models.InlineKeyboardButton{Text: closeText, CallbackData: CallbackPrefixWords + "close"}
 	rows = append(rows, []models.InlineKeyboardButton{closeBtn})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
