@@ -17,6 +17,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/llm/groq"
 	"github.com/nikita/tg-linguine/internal/logger"
+	"github.com/nikita/tg-linguine/internal/progress"
 	"github.com/nikita/tg-linguine/internal/storage"
 	"github.com/nikita/tg-linguine/internal/telegram"
 	"github.com/nikita/tg-linguine/internal/translation"
@@ -114,6 +115,8 @@ func main() {
 		Log:          log,
 	})
 
+	progressRepo := progress.NewSQLite()
+
 	tgBot, err := telegram.New(cfg, log, telegram.Deps{
 		Bundle:       bundle,
 		Users:        usersSvc,
@@ -125,6 +128,7 @@ func main() {
 		ArticleWords: articleWordsRepo,
 		WordStatuses: statusRepo,
 		Dictionary:   dictRepo,
+		Progress:     progressRepo,
 		DB:           db,
 	})
 	if err != nil {

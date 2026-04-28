@@ -10,15 +10,25 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
+	"github.com/nikita/tg-linguine/internal/progress"
 	"github.com/nikita/tg-linguine/internal/session"
 	"github.com/nikita/tg-linguine/internal/users"
 )
+
+// QuizScoring carries the gamification knobs from config so the handler
+// stays decoupled from the config package.
+type QuizScoring struct {
+	XPPerCorrect int
+	DailyGoal    int
+	XPBonusGoal  int
+}
 
 // CallbackPrefixStudy still drives the `/study` flow even after the
 // flashcard mode was replaced with a multiple-choice quiz — the prefix
@@ -41,22 +51,33 @@ type Study struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
 	statuses  dictionary.UserWordStatusRepository
+	progress  progress.Repository
 	fsm       *session.Quiz
 	polls     *session.QuizPolls
+	scoring   QuizScoring
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
 	db        *sql.DB
 
 	rngMu sync.Mutex
 	rng   *rand.Rand
+	now   func() time.Time
+
+	// roundXP tracks total XP earned by each user during the current
+	// active round. Cleared when the session ends. Mirrors the FSM's
+	// per-user lifecycle: cleared on Start, read at End/summary.
+	roundMu sync.Mutex
+	roundXP map[int64]int
 }
 
 func NewStudy(
 	svc *users.Service,
 	langs users.UserLanguageRepository,
 	statuses dictionary.UserWordStatusRepository,
+	prog progress.Repository,
 	fsm *session.Quiz,
 	polls *session.QuizPolls,
+	scoring QuizScoring,
 	db *sql.DB,
 	bundle *goi18n.Bundle,
 	log *slog.Logger,
@@ -65,12 +86,16 @@ func NewStudy(
 		users:     svc,
 		languages: langs,
 		statuses:  statuses,
+		progress:  prog,
 		fsm:       fsm,
 		polls:     polls,
+		scoring:   scoring,
 		bundle:    bundle,
 		log:       log,
 		db:        db,
 		rng:       rand.New(rand.NewSource(rand.Int63())),
+		now:       time.Now,
+		roundXP:   make(map[int64]int),
 	}
 }
 
@@ -96,6 +121,10 @@ func (h *Study) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Up
 	}
 	h.polls.DropForUser(u.ID)
 	h.fsm.Start(u.ID, deck)
+	h.resetRoundXP(u.ID)
+	if err := h.progress.RolloverIfNewDay(ctx, h.db, u.ID, h.now()); err != nil {
+		h.log.Error("quiz cmd: rollover", "err", err)
+	}
 	h.sendCurrentCard(ctx, b, u.ID, loc, msg.Chat.ID)
 }
 
@@ -151,6 +180,10 @@ func (h *Study) startRound(ctx context.Context, b *bot.Bot, userID int64, loc *g
 	}
 	h.polls.DropForUser(userID)
 	h.fsm.Start(userID, deck)
+	h.resetRoundXP(userID)
+	if err := h.progress.RolloverIfNewDay(ctx, h.db, userID, h.now()); err != nil {
+		h.log.Error("quiz cb: rollover", "err", err)
+	}
 	snap, _ := h.fsm.Snapshot(userID)
 	card := snap.Current()
 	// For inline first cards we can repaint the summary message in place.
@@ -209,13 +242,54 @@ func (h *Study) handleAnswer(ctx context.Context, b *bot.Bot, userID int64, loc 
 			return
 		}
 	}
+	progressInfo := h.applyProgress(ctx, userID, correct)
 	if _, ok := h.fsm.RecordAnswer(userID, correct, mastered); !ok {
 		return
 	}
 	// Show feedback for this card with a "Next" button before advancing the
 	// rendered card. The FSM cursor has already advanced; we render the
 	// feedback off `card` (the answered one) and `optIdx` (the user's choice).
-	h.editToHTML(ctx, b, chatID, msgID, renderQuizFeedback(loc, snap, card, optIdx, correct, mastered), quizFeedbackKeyboard(loc))
+	h.editToHTML(ctx, b, chatID, msgID, renderQuizFeedback(loc, snap, card, optIdx, correct, mastered, progressInfo), quizFeedbackKeyboard(loc))
+}
+
+// applyProgress is the single place that touches the progress repo on
+// answer events. Returns nil when the call failed — callers should
+// degrade gracefully rather than fail the round.
+func (h *Study) applyProgress(ctx context.Context, userID int64, correct bool) *progress.RecordResult {
+	if correct {
+		res, err := h.progress.RecordCorrect(ctx, h.db, userID, h.now(),
+			h.scoring.XPPerCorrect, h.scoring.DailyGoal, h.scoring.XPBonusGoal)
+		if err != nil {
+			h.log.Error("quiz: progress record correct", "err", err)
+			return nil
+		}
+		h.addRoundXP(userID, res.XPGained)
+		return &res
+	}
+	if err := h.progress.RecordWrong(ctx, h.db, userID, h.now()); err != nil {
+		h.log.Error("quiz: progress record wrong", "err", err)
+	}
+	return nil
+}
+
+func (h *Study) addRoundXP(userID int64, xp int) {
+	h.roundMu.Lock()
+	defer h.roundMu.Unlock()
+	h.roundXP[userID] += xp
+}
+
+func (h *Study) takeRoundXP(userID int64) int {
+	h.roundMu.Lock()
+	defer h.roundMu.Unlock()
+	xp := h.roundXP[userID]
+	delete(h.roundXP, userID)
+	return xp
+}
+
+func (h *Study) resetRoundXP(userID int64) {
+	h.roundMu.Lock()
+	defer h.roundMu.Unlock()
+	delete(h.roundXP, userID)
 }
 
 func (h *Study) handleSkip(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
@@ -275,7 +349,9 @@ func (h *Study) renderState(ctx context.Context, b *bot.Bot, userID int64, loc *
 	if snap.Done() {
 		final, _ := h.fsm.End(userID)
 		h.polls.DropForUser(userID)
-		h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final), quizSummaryKeyboard(loc))
+		roundXP := h.takeRoundXP(userID)
+		prog := h.fetchProgress(ctx, userID)
+		h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP), quizSummaryKeyboard(loc))
 		return
 	}
 	// If the next card is a native poll, we cannot render it by editing
@@ -297,7 +373,18 @@ func (h *Study) endAndSummarize(ctx context.Context, b *bot.Bot, userID int64, l
 		return
 	}
 	h.polls.DropForUser(userID)
-	h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final), quizSummaryKeyboard(loc))
+	roundXP := h.takeRoundXP(userID)
+	prog := h.fetchProgress(ctx, userID)
+	h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP), quizSummaryKeyboard(loc))
+}
+
+func (h *Study) fetchProgress(ctx context.Context, userID int64) *progress.UserProgress {
+	prog, err := h.progress.Get(ctx, h.db, userID)
+	if err != nil {
+		h.log.Error("quiz: get progress", "err", err)
+		return nil
+	}
+	return prog
 }
 
 func (h *Study) editTo(ctx context.Context, b *bot.Bot, chatID any, msgID int, text string, kb *models.InlineKeyboardMarkup) {
@@ -466,8 +553,10 @@ func renderQuizQuestion(loc *goi18n.Localizer, snap session.QuizSnapshot) string
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-// renderQuizFeedback returns an HTML-formatted feedback message.
-func renderQuizFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card session.QuizCard, picked int, correct, mastered bool) string {
+// renderQuizFeedback returns an HTML-formatted feedback message. When
+// progressInfo is non-nil, the +XP line is appended; if the daily goal
+// just flipped from miss to hit, the bonus line is added too.
+func renderQuizFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card session.QuizCard, picked int, correct, mastered bool, progressInfo *progress.RecordResult) string {
 	var sb strings.Builder
 	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "quiz.card.header", map[string]int{
 		"Index": snap.Cursor + 1,
@@ -500,6 +589,14 @@ func renderQuizFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card s
 		sb.WriteString("\n")
 		sb.WriteString(tgi18n.T(loc, "quiz.feedback.mastered", map[string]any{"Lemma": htmlEscape(card.Lemma)}))
 	}
+	if progressInfo != nil && correct {
+		sb.WriteString("\n")
+		sb.WriteString(tgi18n.T(loc, "quiz.feedback.xp", map[string]any{"XP": progressInfo.BaseXP}))
+		if progressInfo.GoalJustHit {
+			sb.WriteString("\n")
+			sb.WriteString(tgi18n.T(loc, "quiz.feedback.goal_hit", map[string]any{"XP": progressInfo.BonusXP}))
+		}
+	}
 	if card.ExampleTarget != "" || card.ExampleNative != "" {
 		sb.WriteString("\n\n<blockquote>")
 		if card.ExampleTarget != "" {
@@ -516,7 +613,7 @@ func renderQuizFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card s
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot) string {
+func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot, prog *progress.UserProgress, dailyGoal, roundXP int) string {
 	var sb strings.Builder
 	sb.WriteString(tgi18n.T(loc, "quiz.summary.header", map[string]int{
 		"Correct": snap.Correct,
@@ -524,6 +621,17 @@ func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot) string 
 		"Total":   len(snap.Deck),
 	}))
 	sb.WriteString("\n")
+	if prog != nil {
+		sb.WriteString(tgi18n.T(loc, "quiz.summary.xp", map[string]any{"XP": roundXP}))
+		sb.WriteString("\n")
+		sb.WriteString(tgi18n.T(loc, "quiz.summary.streak", map[string]any{"Streak": prog.DayStreak}))
+		sb.WriteString("\n")
+		sb.WriteString(tgi18n.T(loc, "quiz.summary.goal", map[string]any{
+			"Today": prog.TodayCorrect,
+			"Goal":  dailyGoal,
+		}))
+		sb.WriteString("\n")
+	}
 	if len(snap.Mastered) == 0 {
 		sb.WriteString("\n")
 		sb.WriteString(tgi18n.T(loc, "quiz.summary.no_mastered", nil))
@@ -768,6 +876,7 @@ func (h *Study) HandlePollAnswer(ctx context.Context, b *bot.Bot, update *models
 			h.log.Error("quiz poll: record wrong", "err", err)
 		}
 	}
+	progressInfo := h.applyProgress(ctx, u.ID, correct)
 	snap, ok := h.fsm.RecordAnswer(u.ID, correct, mastered)
 	if !ok {
 		return
@@ -779,7 +888,7 @@ func (h *Study) HandlePollAnswer(ctx context.Context, b *bot.Bot, update *models
 	prev := session.QuizSnapshot{Deck: snap.Deck, Cursor: snap.Cursor - 1, Correct: snap.Correct, Wrong: snap.Wrong, Mastered: snap.Mastered}
 	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      entry.ChatID,
-		Text:        renderQuizFeedback(loc, prev, card, picked, correct, mastered),
+		Text:        renderQuizFeedback(loc, prev, card, picked, correct, mastered, progressInfo),
 		ParseMode:   models.ParseModeHTML,
 		ReplyMarkup: quizFeedbackKeyboard(loc),
 	}); err != nil {

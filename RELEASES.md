@@ -1,5 +1,8 @@
 # Releases
 
+## 54 — quiz-progress-and-summary
+Геймификация подключена к квизу: `RolloverIfNewDay` срабатывает в начале раунда, `RecordCorrect/RecordWrong` пишутся на каждый ответ (inline и poll). В фидбэке появляется `+10 XP` (и одноразовый бонус `🎯 +50 XP` при достижении дневной цели), summary раунда расширен строками XP, стрика и цели. Добавлена команда `/me` (`internal/telegram/handlers/me.go`) и i18n-ключи `quiz.feedback.xp/goal_hit`, `quiz.summary.xp/streak/goal`, `me.title/active_language/xp/streak/goal` для en/es/ru.
+
 ## 53 — gamification-storage
 Добавлена per-user таблица `user_progress` (миграция 0008, up/down) с XP, дневным/максимальным стриком и one-shot флагом дневной цели. Новый пакет `internal/progress` инкапсулирует rollover на стыке дней, `RecordCorrect/RecordWrong` и расчёт бонуса; покрыт юнит-тестами на стыки дней, пропуск, повтор цели в тот же день. Конфиг расширен `QUIZ_DAILY_GOAL=20`, `QUIZ_XP_PER_CORRECT=10`, `QUIZ_XP_BONUS_GOAL=50` (имя миграции 0008 — следующее свободное вместо 0006, как было в формулировке).
 

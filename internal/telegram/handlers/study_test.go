@@ -130,7 +130,7 @@ func TestRenderQuizFeedback_CorrectContainsGreenEmoji(t *testing.T) {
 		Options: []string{"дом", "бежать", "учить", "дерево"}, CorrectIndex: 0,
 	}
 
-	text := renderQuizFeedback(loc, snap, card, 0, true, false)
+	text := renderQuizFeedback(loc, snap, card, 0, true, false, nil)
 	if !strings.Contains(text, "✅") {
 		t.Errorf("correct feedback must contain ✅, got: %q", text)
 	}
@@ -150,7 +150,7 @@ func TestRenderQuizFeedback_WrongContainsRedEmoji(t *testing.T) {
 		Options: []string{"дом", "бежать", "учить", "дерево"}, CorrectIndex: 0,
 	}
 
-	text := renderQuizFeedback(loc, snap, card, 1, false, false)
+	text := renderQuizFeedback(loc, snap, card, 1, false, false, nil)
 	if !strings.Contains(text, "❌") {
 		t.Errorf("wrong feedback must contain ❌, got: %q", text)
 	}
@@ -170,7 +170,7 @@ func TestRenderQuizFeedback_ExampleInBlockquote(t *testing.T) {
 		ExampleNative: "Дом большой.",
 	}
 
-	text := renderQuizFeedback(loc, snap, card, 0, true, false)
+	text := renderQuizFeedback(loc, snap, card, 0, true, false, nil)
 	if !strings.Contains(text, "<blockquote>") {
 		t.Errorf("example must be in <blockquote>, got: %q", text)
 	}

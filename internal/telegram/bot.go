@@ -16,6 +16,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/llm"
+	"github.com/nikita/tg-linguine/internal/progress"
 	"github.com/nikita/tg-linguine/internal/session"
 	"github.com/nikita/tg-linguine/internal/telegram/handlers"
 	"github.com/nikita/tg-linguine/internal/users"
@@ -49,6 +50,7 @@ type Deps struct {
 	ArticleWords dictionary.ArticleWordsRepository
 	WordStatuses dictionary.UserWordStatusRepository
 	Dictionary   dictionary.Repository
+	Progress     progress.Repository
 	DB           *sql.DB
 }
 
@@ -88,7 +90,12 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	myWordsH := handlers.NewMyWords(deps.Users, deps.Languages, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	quizFSM := session.NewQuiz(studySessionTTL)
 	quizPolls := session.NewQuizPolls(studySessionTTL)
-	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, quizFSM, quizPolls, deps.DB, deps.Bundle, log)
+	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, deps.Progress, quizFSM, quizPolls, handlers.QuizScoring{
+		XPPerCorrect: cfg.QuizXPPerCorrect,
+		DailyGoal:    cfg.QuizDailyGoal,
+		XPBonusGoal:  cfg.QuizXPBonusGoal,
+	}, deps.DB, deps.Bundle, log)
+	meH := handlers.NewMe(deps.Users, deps.Languages, deps.Progress, cfg.QuizDailyGoal, deps.DB, deps.Bundle, log)
 	deleteH := handlers.NewDelete(deps.Users, onbFSM, quizFSM, keyWaiter, deps.Bundle, log)
 	settingsH := handlers.NewSettings(deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
 	adminGate := func(uid int64) bool { return IsAdmin(cfg, uid) }
@@ -101,6 +108,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/settings", bot.MatchTypeExact, settingsH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/mywords", bot.MatchTypeExact, myWordsH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/study", bot.MatchTypeExact, studyH.HandleCommand)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/me", bot.MatchTypeExact, meH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/delete_me", bot.MatchTypeExact, deleteH.HandleCommand)
 	// Admin commands. The handlers themselves silently no-op for non-admins
 	// (see handlers/admin.go), so registering them globally does not leak the

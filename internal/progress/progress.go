@@ -25,7 +25,11 @@ type UserProgress struct {
 
 // RecordResult summarises what changed during a RecordCorrect call so
 // the caller can render feedback without fetching the row again.
+// XPGained == BaseXP + BonusXP; the split is exposed so the UI can
+// celebrate the bonus separately from the per-correct payout.
 type RecordResult struct {
+	BaseXP       int
+	BonusXP      int
 	XPGained     int
 	GoalJustHit  bool
 	NewDayStreak int
@@ -149,12 +153,14 @@ func (s *SQLite) RecordCorrect(
 	}
 
 	newTodayCorrect := cur.TodayCorrect + 1
-	xp := xpPerCorrect
+	baseXP := xpPerCorrect
+	bonusXP := 0
 	goalJustHit := false
 	if !cur.DailyGoalHitToday && dailyGoal > 0 && newTodayCorrect >= dailyGoal {
 		goalJustHit = true
-		xp += xpBonus
+		bonusXP = xpBonus
 	}
+	xp := baseXP + bonusXP
 	newGoalHit := cur.DailyGoalHitToday || goalJustHit
 
 	const q = `
@@ -175,6 +181,8 @@ func (s *SQLite) RecordCorrect(
 	}
 
 	return RecordResult{
+		BaseXP:       baseXP,
+		BonusXP:      bonusXP,
 		XPGained:     xp,
 		GoalJustHit:  goalJustHit,
 		NewDayStreak: newDayStreak,
