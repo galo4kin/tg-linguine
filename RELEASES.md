@@ -1,5 +1,15 @@
 # Releases
 
+## 30 — readme-sync
+README приведён к фактическому коду: добавлены недостающие env
+(`GROQ_MODEL`, `RATE_LIMIT_PER_HOUR`, `MAX_TOKENS_PER_ARTICLE`,
+`LOG_*`), таблица env совпадает с `internal/config/config.go` и
+`.env.example` 1:1. Появились разделы «Миграции» (auto on start через
+`embed` + `golang-migrate`), «Команды бота» (полная таблица:
+`/start`, `/setkey`, `/history`, `/settings`, `/mywords`, `/study`,
+`/delete_me`, плюс URL/API-key/callback-входы) и «Раскатка новой
+версии». Версия Go подтянута к `1.26.2`.
+
 ## 29 — hardening
 Прод-готовность: `recoverMiddleware` ловит панику любого хендлера,
 логирует stacktrace с `errors_total=1` и отвечает пользователю
