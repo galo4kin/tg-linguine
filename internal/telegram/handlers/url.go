@@ -105,11 +105,12 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 		for _, w := range result.Words {
 			preview = append(preview, w.Lemma)
 		}
+		view := DefaultCardView()
 		if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 			ChatID:      msg.Chat.ID,
 			MessageID:   statusMsg.ID,
-			Text:        renderArticleCard(loc, result.Article, preview, len(result.Words)),
-			ReplyMarkup: articleCardKeyboard(loc, result.Article.ID, len(result.Words)),
+			Text:        renderArticleCard(loc, result.Article, preview, len(result.Words), view),
+			ReplyMarkup: articleCardKeyboard(loc, result.Article, len(result.Words), view),
 		}); err != nil {
 			h.log.Debug("url: send card", "err", err)
 		}

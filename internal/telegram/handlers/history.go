@@ -215,12 +215,13 @@ func (h *History) openArticle(ctx context.Context, b *bot.Bot, chatID any, msgID
 		}
 	}
 
-	text := renderArticleCard(loc, article, preview, totalWords)
+	view := DefaultCardView()
+	text := renderArticleCard(loc, article, preview, totalWords, view)
 	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
 		ChatID:      chatID,
 		MessageID:   msgID,
 		Text:        text,
-		ReplyMarkup: articleCardKeyboard(loc, article.ID, totalWords),
+		ReplyMarkup: articleCardKeyboard(loc, article, totalWords, view),
 	}); err != nil {
 		h.log.Debug("history open: edit", "err", err)
 	}

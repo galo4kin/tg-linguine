@@ -1,5 +1,19 @@
 # Releases
 
+## 18 — adapted-summary
+Article card теперь поддерживает три уровня адаптации текста и
+переключение языка summary без отправки нового сообщения. Добавлен
+`articles.AdaptedVersions` + `Article.ParseAdaptedVersions`,
+inline-клавиатура card-а получила ряд из трёх кнопок «Проще /
+Текущий / Сложнее» (недоступные уровни остаются с noop-callback,
+выбранный отмечается «✓») и тоггл «🌐 Перевод/Оригинал summary».
+Состояние просмотра кодируется прямо в callback-данных
+(`art:v:<id>:<l|c|h>:<t|n>`), новый `Card`-handler через
+`EditMessageText` перерисовывает карточку. URL- и History-флоу
+открывают карточку в дефолтном виде (`current` + target summary),
+i18n обновлён в ru/en/es, добавлен round-trip-тест на
+`parseCardCallback`.
+
 ## 17 — reuse-articles
 В `articles.Service.AnalyzeArticle` появилась проверка кэша: до
 вызова extractor-а и LLM рассчитываем `URLHash(NormalizeURL(url))`,

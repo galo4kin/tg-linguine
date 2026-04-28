@@ -64,6 +64,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	urlH := handlers.NewURL(deps.Users, deps.Articles, deps.Bundle, log)
 	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	historyH := handlers.NewHistory(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
+	cardH := handlers.NewCard(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
@@ -76,6 +77,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWords, bot.MatchTypePrefix, wordsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWordStatus, bot.MatchTypePrefix, wordsH.HandleStatusCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixHistory, bot.MatchTypePrefix, historyH.HandleCallback)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixCard, bot.MatchTypePrefix, cardH.HandleCallback)
 
 	tb.b = b
 	return tb, nil
