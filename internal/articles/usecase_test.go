@@ -30,10 +30,12 @@ type stubLLM struct {
 	resp        llm.AnalyzeResponse
 	err         error
 	lastRequest *llm.AnalyzeRequest
+	calls       int
 }
 
 func (s *stubLLM) ValidateAPIKey(ctx context.Context, key string) error { return nil }
 func (s *stubLLM) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest) (llm.AnalyzeResponse, error) {
+	s.calls++
 	s.lastRequest = &req
 	return s.resp, s.err
 }
@@ -231,6 +233,160 @@ func TestAnalyzeArticle_LLMError(t *testing.T) {
 	if n != 0 {
 		t.Fatalf("articles persisted on LLM error: %d", n)
 	}
+}
+
+// TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR asserts the step-17 reuse flow:
+// the second call on the same normalized URL + active language + matching
+// CEFR must NOT touch the extractor or the LLM, and must return the stored
+// article + the same word list (in original insertion order).
+func TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR(t *testing.T) {
+	db := newServiceTestDB(t)
+	cipher := newCipher(t)
+
+	usersSvc := users.NewService(users.NewSQLiteRepository(db))
+	langs := users.NewSQLiteUserLanguageRepository(db)
+	keys := users.NewSQLiteAPIKeyRepository(db, cipher)
+
+	userID := seedUserAndKey(t, db)
+	if err := keys.Set(context.Background(), userID, users.ProviderGroq, "gsk_test"); err != nil {
+		t.Fatalf("set key: %v", err)
+	}
+
+	llmStub := &stubLLM{resp: sampleResponse()}
+	rawURL := "https://example.com/article?utm_source=x"
+	normalized, _ := articles.NormalizeURL(rawURL)
+
+	extractorCalls := 0
+	wrappedExtractor := stubExtractorFn(func(ctx context.Context, url string) (articles.Extracted, error) {
+		extractorCalls++
+		return articles.Extracted{
+			URL:           rawURL,
+			NormalizedURL: normalized,
+			URLHash:       articles.URLHash(normalized),
+			Title:         "Cache me",
+			Content:       "body content body content",
+			Lang:          "en",
+		}, nil
+	})
+
+	svc := articles.NewService(articles.ServiceDeps{
+		DB:           db,
+		Users:        usersSvc,
+		Languages:    langs,
+		Keys:         keys,
+		Extractor:    wrappedExtractor,
+		LLM:          llmStub,
+		Articles:     articles.NewSQLiteRepository(db),
+		Dictionary:   dictionary.NewSQLiteRepository(db),
+		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
+		Statuses:     dictionary.NewSQLiteUserWordStatusRepository(db),
+		Log:          slog.New(slog.NewTextHandler(discardWriter{}, nil)),
+	})
+
+	first, err := svc.AnalyzeArticle(context.Background(), userID, rawURL, nil)
+	if err != nil {
+		t.Fatalf("first analyze: %v", err)
+	}
+	if extractorCalls != 1 || llmStub.calls != 1 {
+		t.Fatalf("first: expected extractor=1 llm=1, got extractor=%d llm=%d", extractorCalls, llmStub.calls)
+	}
+	if first.Article.CEFRDetected != "B1" {
+		t.Fatalf("expected stored CEFR=B1 (matches active), got %q", first.Article.CEFRDetected)
+	}
+
+	// Same URL, second time. Even with different tracking params (utm_source) —
+	// normalization should make the hash identical, and we expect a cache hit.
+	second, err := svc.AnalyzeArticle(context.Background(), userID, rawURL+"&utm_campaign=y", nil)
+	if err != nil {
+		t.Fatalf("second analyze: %v", err)
+	}
+	if extractorCalls != 1 {
+		t.Fatalf("cache hit must not call extractor; calls=%d", extractorCalls)
+	}
+	if llmStub.calls != 1 {
+		t.Fatalf("cache hit must not call llm; calls=%d", llmStub.calls)
+	}
+	if second.Article.ID != first.Article.ID {
+		t.Fatalf("expected same article id, got %d vs %d", second.Article.ID, first.Article.ID)
+	}
+	if len(second.Words) != len(first.Words) {
+		t.Fatalf("expected %d cached words, got %d", len(first.Words), len(second.Words))
+	}
+	for i := range first.Words {
+		if first.Words[i].Lemma != second.Words[i].Lemma {
+			t.Fatalf("word %d: lemma mismatch %q vs %q", i, first.Words[i].Lemma, second.Words[i].Lemma)
+		}
+	}
+
+	// Sanity: only one article row was persisted.
+	var n int
+	db.QueryRow(`SELECT COUNT(*) FROM articles WHERE user_id = ?`, userID).Scan(&n)
+	if n != 1 {
+		t.Fatalf("expected exactly 1 article row, got %d", n)
+	}
+}
+
+// TestAnalyzeArticle_CacheMissOnCEFRChange covers the fall-through: when the
+// stored article's detected CEFR differs from the user's current level, the
+// pipeline must NOT shortcut and must invoke the extractor + LLM again. This
+// pins the behavior that step 19 will revisit (regen on level change).
+func TestAnalyzeArticle_CacheMissOnCEFRChange(t *testing.T) {
+	db := newServiceTestDB(t)
+	cipher := newCipher(t)
+
+	usersSvc := users.NewService(users.NewSQLiteRepository(db))
+	langs := users.NewSQLiteUserLanguageRepository(db)
+	keys := users.NewSQLiteAPIKeyRepository(db, cipher)
+
+	userID := seedUserAndKey(t, db)
+	if err := keys.Set(context.Background(), userID, users.ProviderGroq, "gsk_test"); err != nil {
+		t.Fatalf("set key: %v", err)
+	}
+
+	rawURL := "https://example.com/cefr-mismatch"
+	normalized, _ := articles.NormalizeURL(rawURL)
+
+	// Pre-seed an article with cefr_detected = B2 (user is at B1).
+	repo := articles.NewSQLiteRepository(db)
+	a := &articles.Article{
+		UserID: userID, SourceURL: normalized, SourceURLHash: articles.URLHash(normalized),
+		Title: "old", LanguageCode: "en", CEFRDetected: "B2",
+	}
+	if err := repo.Insert(context.Background(), db, a); err != nil {
+		t.Fatalf("seed article: %v", err)
+	}
+
+	llmStub := &stubLLM{err: llm.ErrUnavailable} // will be called and fail; counter is what we assert.
+	extractorCalls := 0
+	svc := articles.NewService(articles.ServiceDeps{
+		DB:        db,
+		Users:     usersSvc,
+		Languages: langs,
+		Keys:      keys,
+		Extractor: stubExtractorFn(func(ctx context.Context, url string) (articles.Extracted, error) {
+			extractorCalls++
+			return articles.Extracted{}, llm.ErrUnavailable
+		}),
+		LLM:          llmStub,
+		Articles:     repo,
+		Dictionary:   dictionary.NewSQLiteRepository(db),
+		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
+		Statuses:     dictionary.NewSQLiteUserWordStatusRepository(db),
+	})
+
+	_, err := svc.AnalyzeArticle(context.Background(), userID, rawURL, nil)
+	if err == nil {
+		t.Fatalf("expected error on extractor failure")
+	}
+	if extractorCalls != 1 {
+		t.Fatalf("CEFR mismatch must fall through to extractor; calls=%d", extractorCalls)
+	}
+}
+
+type stubExtractorFn func(ctx context.Context, url string) (articles.Extracted, error)
+
+func (f stubExtractorFn) Extract(ctx context.Context, url string) (articles.Extracted, error) {
+	return f(ctx, url)
 }
 
 // TestAnalyzeArticle_KnownWordsForwarded asserts the integration of step 15:

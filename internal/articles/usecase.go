@@ -104,6 +104,33 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		return nil, fmt.Errorf("api key: %w", err)
 	}
 
+	// Cache hit: same user + same normalized URL hash + same target language —
+	// and same detected CEFR as the user's current level — replays the stored
+	// article card without invoking the extractor or LLM. Mismatched CEFR or
+	// failed normalization falls through to the full pipeline.
+	if normalized, normErr := NormalizeURL(url); normErr == nil {
+		hash := URLHash(normalized)
+		existing, lookupErr := s.articles.ByUserAndHash(ctx, s.db, userID, hash, active.LanguageCode)
+		if lookupErr != nil && !errors.Is(lookupErr, ErrNotFound) {
+			return nil, fmt.Errorf("cache lookup: %w", lookupErr)
+		}
+		if existing != nil && existing.CEFRDetected == active.CEFRLevel {
+			words, err := s.loadStoredWords(ctx, existing)
+			if err != nil {
+				return nil, err
+			}
+			if s.log != nil {
+				s.log.Info("article reused",
+					"user_id", userID,
+					"article_id", existing.ID,
+					"cache_hit", true,
+					"analysis_skipped_ms", time.Since(start).Milliseconds(),
+				)
+			}
+			return &AnalyzedArticle{Article: existing, Words: words}, nil
+		}
+	}
+
 	progress(onProgress, StageFetching)
 	extracted, err := s.extractor.Extract(ctx, url)
 	if err != nil {
@@ -214,4 +241,32 @@ func progress(p ProgressFunc, s Stage) {
 	if p != nil {
 		p(s)
 	}
+}
+
+// loadStoredWords reconstructs the DictionaryWord slice for a previously
+// analyzed article so the caller can rebuild the article card without going
+// through the LLM. Order matches the original insertion (article_words.rowid).
+func (s *Service) loadStoredWords(ctx context.Context, article *Article) ([]dictionary.DictionaryWord, error) {
+	total, err := s.awords.CountByArticle(ctx, s.db, article.ID)
+	if err != nil {
+		return nil, fmt.Errorf("cache: count words: %w", err)
+	}
+	if total == 0 {
+		return nil, nil
+	}
+	views, err := s.awords.PageByArticle(ctx, s.db, article.ID, total, 0)
+	if err != nil {
+		return nil, fmt.Errorf("cache: load words: %w", err)
+	}
+	out := make([]dictionary.DictionaryWord, 0, len(views))
+	for _, v := range views {
+		out = append(out, dictionary.DictionaryWord{
+			ID:               v.DictionaryWordID,
+			LanguageCode:     article.LanguageCode,
+			Lemma:            v.Lemma,
+			POS:              v.POS,
+			TranscriptionIPA: v.TranscriptionIPA,
+		})
+	}
+	return out, nil
 }

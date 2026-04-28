@@ -31,6 +31,9 @@ type Repository interface {
 	ListByUser(ctx context.Context, q DBTX, userID int64, limit, offset int) ([]Article, error)
 	// CountByUser returns how many articles the user has stored.
 	CountByUser(ctx context.Context, q DBTX, userID int64) (int, error)
+	// ByUserAndHash looks up an article previously stored for the user under the
+	// same (url_hash, language_code) — returns ErrNotFound if no such row.
+	ByUserAndHash(ctx context.Context, q DBTX, userID int64, urlHash, languageCode string) (*Article, error)
 }
 
 type sqliteRepo struct {
@@ -136,6 +139,30 @@ func (r *sqliteRepo) CountByUser(ctx context.Context, q DBTX, userID int64) (int
 		return 0, fmt.Errorf("articles: count by user: %w", err)
 	}
 	return n, nil
+}
+
+func (r *sqliteRepo) ByUserAndHash(ctx context.Context, q DBTX, userID int64, urlHash, languageCode string) (*Article, error) {
+	const stmt = `
+		SELECT id, user_id, source_url, source_url_hash, title, language_code,
+		       COALESCE(cefr_detected, ''), COALESCE(summary_target, ''),
+		       COALESCE(summary_native, ''), COALESCE(adapted_versions, ''),
+		       COALESCE(category_id, 0), created_at
+		FROM articles
+		WHERE user_id = ? AND source_url_hash = ? AND language_code = ?
+	`
+	var a Article
+	err := q.QueryRowContext(ctx, stmt, userID, urlHash, languageCode).Scan(
+		&a.ID, &a.UserID, &a.SourceURL, &a.SourceURLHash, &a.Title, &a.LanguageCode,
+		&a.CEFRDetected, &a.SummaryTarget, &a.SummaryNative, &a.AdaptedVersions,
+		&a.CategoryID, &a.CreatedAt,
+	)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, ErrNotFound
+	}
+	if err != nil {
+		return nil, fmt.Errorf("articles: by user and hash: %w", err)
+	}
+	return &a, nil
 }
 
 func (r *sqliteRepo) UpsertCategory(ctx context.Context, q DBTX, code string) (int64, error) {

@@ -1,5 +1,17 @@
 # Releases
 
+## 17 — reuse-articles
+В `articles.Service.AnalyzeArticle` появилась проверка кэша: до
+вызова extractor-а и LLM рассчитываем `URLHash(NormalizeURL(url))`,
+смотрим в `articles_repo.ByUserAndHash` (новый метод), и если
+найдена запись с тем же `language_code` и `cefr_detected ==
+active.CEFRLevel` — возвращаем сохранённую article card,
+переподнимая слова через `awords.PageByArticle`. В логах появляется
+`cache_hit=true` с `analysis_skipped_ms`. Случай несовпадающего
+CEFR пока проваливается в обычный путь (зафиксировано в тесте,
+шаг 19 будет это улучшать). Покрыто двумя тестами: cache hit (LLM
+не зовётся) и fall-through на CEFR mismatch.
+
 ## 16 — history
 Появилась команда `/history` и callback-семейство `hist:*`: из
 `articles_repo` отдаются 10 статей пользователя на страницу
