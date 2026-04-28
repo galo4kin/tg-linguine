@@ -19,6 +19,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/logger"
 	"github.com/nikita/tg-linguine/internal/storage"
 	"github.com/nikita/tg-linguine/internal/telegram"
+	"github.com/nikita/tg-linguine/internal/translation"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -75,9 +76,18 @@ func main() {
 		groq.WithLogger(log),
 	)
 
+	var yandexTranslator translation.Translator
+	if cfg.YandexDictAPIKey != "" {
+		yandexTranslator = translation.NewYandex(cfg.YandexDictAPIKey)
+		log.Info("yandex dictionary: enabled")
+	} else {
+		log.Info("yandex dictionary: disabled (YANDEX_DICT_API_KEY not set)")
+	}
+
 	extractor := articles.NewReadabilityExtractor(
 		time.Duration(cfg.HTTPTimeoutSec)*time.Second,
 		int64(cfg.MaxArticleSizeKB)<<10,
+		articles.WithLogger(log),
 	)
 	articleRepo := articles.NewSQLiteRepository(db)
 	dictRepo := dictionary.NewSQLiteRepository(db)
@@ -100,6 +110,7 @@ func main() {
 		Statuses:     statusRepo,
 		MaxTokens:    cfg.MaxTokensPerArticle,
 		Blocklist:    blocklist,
+		Translator:   yandexTranslator,
 		Log:          log,
 	})
 

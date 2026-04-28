@@ -12,6 +12,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	"github.com/nikita/tg-linguine/internal/llm"
 	"github.com/nikita/tg-linguine/internal/llm/groq"
+	"github.com/nikita/tg-linguine/internal/translation"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -122,9 +123,10 @@ type Service struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
 	keys      users.APIKeyRepository
-	extractor Extractor
-	llm       llm.Provider
-	articles  Repository
+	extractor  Extractor
+	llm        llm.Provider
+	translator translation.Translator
+	articles   Repository
 	dict      dictionary.Repository
 	awords    dictionary.ArticleWordsRepository
 	statuses  dictionary.UserWordStatusRepository
@@ -141,6 +143,9 @@ type ServiceDeps struct {
 	Keys         users.APIKeyRepository
 	Extractor    Extractor
 	LLM          llm.Provider
+	// Translator enriches LLM-generated word translations via an external
+	// dictionary API. Nil disables enrichment — LLM translations are used as-is.
+	Translator   translation.Translator
 	Articles     Repository
 	Dictionary   dictionary.Repository
 	ArticleWords dictionary.ArticleWordsRepository
@@ -161,7 +166,7 @@ func NewService(d ServiceDeps) *Service {
 	}
 	return &Service{
 		db: d.DB, users: d.Users, languages: d.Languages, keys: d.Keys,
-		extractor: d.Extractor, llm: d.LLM,
+		extractor: d.Extractor, llm: d.LLM, translator: d.Translator,
 		articles: d.Articles, dict: d.Dictionary, awords: d.ArticleWords, statuses: d.Statuses,
 		maxTokens: maxTokens,
 		blocklist: d.Blocklist,
@@ -455,6 +460,22 @@ func (s *Service) runAnalysis(ctx context.Context, userID int64, user *users.Use
 			)
 		}
 		return nil, ErrBlockedContent
+	}
+
+	if s.translator != nil {
+		for i := range resp.Words {
+			t, err := s.translator.Translate(ctx, resp.Words[i].Lemma, languageCode, user.InterfaceLanguage)
+			if err != nil {
+				if s.log != nil {
+					s.log.Warn("translator enrichment failed, using LLM fallback",
+						"lemma", resp.Words[i].Lemma, "err", err)
+				}
+				continue
+			}
+			if t != "" {
+				resp.Words[i].TranslationNative = t
+			}
+		}
 	}
 
 	progress(onProgress, StagePersisting)

@@ -35,6 +35,9 @@ type Config struct {
 	// commands (and that receives the startup ping). Zero — the default —
 	// disables all admin functionality entirely.
 	AdminUserID int64 `env:"ADMIN_USER_ID" envDefault:"0"`
+	// YandexDictAPIKey enables Yandex Dictionary lookups for word translations.
+	// When empty the LLM-generated translation is used as-is.
+	YandexDictAPIKey string `env:"YANDEX_DICT_API_KEY"`
 }
 
 func Load() (*Config, error) {
