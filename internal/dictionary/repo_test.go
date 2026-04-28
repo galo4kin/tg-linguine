@@ -236,3 +236,110 @@ func TestUserWordStatus_Upsert(t *testing.T) {
 		t.Fatalf("expected known, got %s", got.Status)
 	}
 }
+
+func TestUserWordStatus_PageUserWords_FiltersAndOrder(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	enHouse, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "house"})
+	enRun, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "run"})
+	enLearn, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "learn"})
+	enSkip, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "skip"})
+	deHaus, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "de", Lemma: "haus"})
+
+	for _, s := range []struct {
+		wid int64
+		st  dictionary.WordStatus
+	}{
+		{enHouse, dictionary.StatusKnown},
+		{enRun, dictionary.StatusMastered},
+		{enLearn, dictionary.StatusLearning},
+		{enSkip, dictionary.StatusSkipped},
+		{deHaus, dictionary.StatusKnown},
+	} {
+		if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{
+			UserID: 1, DictionaryWordID: s.wid, Status: s.st,
+		}); err != nil {
+			t.Fatalf("seed: %v", err)
+		}
+	}
+
+	tests := []struct {
+		name     string
+		statuses []dictionary.WordStatus
+		want     []string
+	}{
+		{
+			name: "all-tracked",
+			statuses: []dictionary.WordStatus{
+				dictionary.StatusLearning, dictionary.StatusKnown, dictionary.StatusMastered,
+			},
+			want: []string{"house", "learn", "run"},
+		},
+		{
+			name:     "learning-only",
+			statuses: []dictionary.WordStatus{dictionary.StatusLearning},
+			want:     []string{"learn"},
+		},
+		{
+			name:     "known-only",
+			statuses: []dictionary.WordStatus{dictionary.StatusKnown},
+			want:     []string{"house"},
+		},
+		{
+			name:     "mastered-only",
+			statuses: []dictionary.WordStatus{dictionary.StatusMastered},
+			want:     []string{"run"},
+		},
+		{
+			name:     "nil-includes-skipped",
+			statuses: nil,
+			want:     []string{"house", "learn", "run", "skip"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			rows, err := statuses.PageUserWords(ctx, db, 1, "en", tc.statuses, 100, 0)
+			if err != nil {
+				t.Fatalf("page: %v", err)
+			}
+			got := make([]string, 0, len(rows))
+			for _, r := range rows {
+				got = append(got, r.Lemma)
+			}
+			if len(got) != len(tc.want) {
+				t.Fatalf("len mismatch: got %v, want %v", got, tc.want)
+			}
+			for i := range got {
+				if got[i] != tc.want[i] {
+					t.Fatalf("at %d: got %q want %q (full got=%v)", i, got[i], tc.want[i], got)
+				}
+			}
+			n, err := statuses.CountUserWords(ctx, db, 1, "en", tc.statuses)
+			if err != nil {
+				t.Fatalf("count: %v", err)
+			}
+			if n != len(tc.want) {
+				t.Fatalf("count mismatch: got %d want %d", n, len(tc.want))
+			}
+		})
+	}
+
+	// Pagination: limit 2 should still return alphabetical order.
+	rows, err := statuses.PageUserWords(ctx, db, 1, "en", nil, 2, 0)
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(rows) != 2 || rows[0].Lemma != "house" || rows[1].Lemma != "learn" {
+		t.Fatalf("page1 unexpected: %+v", rows)
+	}
+	rows, err = statuses.PageUserWords(ctx, db, 1, "en", nil, 2, 2)
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(rows) != 2 || rows[0].Lemma != "run" || rows[1].Lemma != "skip" {
+		t.Fatalf("page2 unexpected: %+v", rows)
+	}
+}

@@ -69,6 +69,14 @@ type UserWordStatusRepository interface {
 	// or mastered for a given target language, sorted alphabetically. These
 	// lemmas are passed to the LLM so it skips re-introducing them.
 	KnownLemmas(ctx context.Context, q DBTX, userID int64, languageCode string) ([]string, error)
+	// CountUserWords returns the number of vocabulary entries the user has
+	// for a target language, optionally restricted to a subset of statuses
+	// (passing nil counts every status row).
+	CountUserWords(ctx context.Context, q DBTX, userID int64, languageCode string, statuses []WordStatus) (int, error)
+	// PageUserWords returns up to `limit` vocabulary entries starting at
+	// `offset`, ordered alphabetically by lemma. Same status semantics as
+	// CountUserWords.
+	PageUserWords(ctx context.Context, q DBTX, userID int64, languageCode string, statuses []WordStatus, limit, offset int) ([]UserWordEntry, error)
 }
 
 type sqliteRepo struct{ db *sql.DB }
@@ -272,6 +280,77 @@ func (r *sqliteStatusRepo) Get(ctx context.Context, q DBTX, userID, wordID int64
 	}
 	s.Status = WordStatus(status)
 	return &s, nil
+}
+
+func (r *sqliteStatusRepo) CountUserWords(ctx context.Context, q DBTX, userID int64, languageCode string, statuses []WordStatus) (int, error) {
+	stmt, args := buildUserWordsQuery(
+		`SELECT COUNT(*)
+		 FROM user_word_status uws
+		 JOIN dictionary_words dw ON dw.id = uws.dictionary_word_id
+		 WHERE uws.user_id = ? AND dw.language_code = ?`,
+		"", userID, languageCode, statuses, 0, 0,
+	)
+	var n int
+	if err := q.QueryRowContext(ctx, stmt, args...).Scan(&n); err != nil {
+		return 0, fmt.Errorf("dictionary: count user words: %w", err)
+	}
+	return n, nil
+}
+
+func (r *sqliteStatusRepo) PageUserWords(ctx context.Context, q DBTX, userID int64, languageCode string, statuses []WordStatus, limit, offset int) ([]UserWordEntry, error) {
+	stmt, args := buildUserWordsQuery(
+		`SELECT dw.id, dw.lemma, COALESCE(dw.pos, ''), uws.status
+		 FROM user_word_status uws
+		 JOIN dictionary_words dw ON dw.id = uws.dictionary_word_id
+		 WHERE uws.user_id = ? AND dw.language_code = ?`,
+		` ORDER BY dw.lemma ASC LIMIT ? OFFSET ?`,
+		userID, languageCode, statuses, limit, offset,
+	)
+	rows, err := q.QueryContext(ctx, stmt, args...)
+	if err != nil {
+		return nil, fmt.Errorf("dictionary: page user words: %w", err)
+	}
+	defer rows.Close()
+	var out []UserWordEntry
+	for rows.Next() {
+		var e UserWordEntry
+		var status string
+		if err := rows.Scan(&e.DictionaryWordID, &e.Lemma, &e.POS, &status); err != nil {
+			return nil, fmt.Errorf("dictionary: scan user word: %w", err)
+		}
+		e.Status = WordStatus(status)
+		out = append(out, e)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("dictionary: iter user words: %w", err)
+	}
+	return out, nil
+}
+
+// buildUserWordsQuery composes the count/page queries from the same WHERE
+// skeleton: same user/language filter, optional IN-list of statuses, and an
+// optional ORDER BY/LIMIT tail. When `tail` is empty, limit/offset are not
+// appended (count flow); otherwise tail is `" ORDER BY ... LIMIT ? OFFSET ?"`
+// and limit/offset are appended to args.
+func buildUserWordsQuery(head, tail string, userID int64, languageCode string, statuses []WordStatus, limit, offset int) (string, []any) {
+	var sb strings.Builder
+	sb.WriteString(head)
+	args := []any{userID, languageCode}
+	if len(statuses) > 0 {
+		ph := make([]string, len(statuses))
+		for i, s := range statuses {
+			ph[i] = "?"
+			args = append(args, string(s))
+		}
+		sb.WriteString(" AND uws.status IN (")
+		sb.WriteString(strings.Join(ph, ","))
+		sb.WriteString(")")
+	}
+	if tail != "" {
+		sb.WriteString(tail)
+		args = append(args, limit, offset)
+	}
+	return sb.String(), args
 }
 
 func nullStr(s string) any {

@@ -42,3 +42,13 @@ type UserWordStatus struct {
 	WrongTotal       int
 	UpdatedAt        time.Time
 }
+
+// UserWordEntry is the join projection used by the /mywords list — a single
+// row of a user's vocabulary, with the status keeping the join slim (no
+// per-article surfaces, no example sentences).
+type UserWordEntry struct {
+	DictionaryWordID int64
+	Lemma            string
+	POS              string
+	Status           WordStatus
+}

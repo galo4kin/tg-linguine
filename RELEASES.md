@@ -1,5 +1,13 @@
 # Releases
 
+## 21 — my-words
+Появилась команда `/mywords`: inline-меню со словарём пользователя по
+активному языку с фильтрами All / Learning / Known / Mastered и
+пагинацией по 10. Каждое слово открывается в подменю смены статуса
+(`mw:e`/`mw:s`); под капотом добавлены `dictionary.UserWordEntry` +
+методы `CountUserWords`/`PageUserWords` и i18n-строки `mywords.*`
+для ru/en/es.
+
 ## 20.6 — refactor-cefr-and-lang-validators
 Списки поддерживаемых языков и уровней CEFR + соответствующие
 валидаторы переехали в новый `internal/users/codes.go`
