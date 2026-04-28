@@ -13,6 +13,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/crypto"
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	"github.com/nikita/tg-linguine/internal/llm"
+	"github.com/nikita/tg-linguine/internal/llm/mock"
 	"github.com/nikita/tg-linguine/internal/storage"
 	"github.com/nikita/tg-linguine/internal/users"
 )
@@ -24,30 +25,6 @@ type stubExtractor struct {
 
 func (s stubExtractor) Extract(ctx context.Context, url string) (articles.Extracted, error) {
 	return s.out, s.err
-}
-
-type stubLLM struct {
-	resp        llm.AnalyzeResponse
-	err         error
-	lastRequest *llm.AnalyzeRequest
-	calls       int
-
-	adaptResp        llm.AdaptResponse
-	adaptErr         error
-	adaptCalls       int
-	lastAdaptRequest *llm.AdaptRequest
-}
-
-func (s *stubLLM) ValidateAPIKey(ctx context.Context, key string) error { return nil }
-func (s *stubLLM) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest) (llm.AnalyzeResponse, error) {
-	s.calls++
-	s.lastRequest = &req
-	return s.resp, s.err
-}
-func (s *stubLLM) Adapt(ctx context.Context, key string, req llm.AdaptRequest) (llm.AdaptResponse, error) {
-	s.adaptCalls++
-	s.lastAdaptRequest = &req
-	return s.adaptResp, s.adaptErr
 }
 
 func newServiceTestDB(t *testing.T) *sql.DB {
@@ -125,7 +102,7 @@ func TestAnalyzeArticle_HappyPath(t *testing.T) {
 		Languages:    langs,
 		Keys:         keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://x", NormalizedURL: "https://x", URLHash: "h", Title: "Title", Content: "body content body content", Lang: "en"}},
-		LLM:          &stubLLM{resp: sampleResponse()},
+		LLM:          &mock.Provider{AnalyzeResp: sampleResponse()},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -177,7 +154,7 @@ func TestAnalyzeArticle_NoLanguage(t *testing.T) {
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{},
-		LLM:          &stubLLM{},
+		LLM:          &mock.Provider{},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -200,7 +177,7 @@ func TestAnalyzeArticle_NoAPIKey(t *testing.T) {
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{},
-		LLM:          &stubLLM{},
+		LLM:          &mock.Provider{},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -226,7 +203,7 @@ func TestAnalyzeArticle_LLMError(t *testing.T) {
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://x", URLHash: "h", Title: "t", Content: "c"}},
-		LLM:          &stubLLM{err: llm.ErrRateLimited},
+		LLM:          &mock.Provider{AnalyzeErr: llm.ErrRateLimited},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),
@@ -262,7 +239,7 @@ func TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR(t *testing.T) {
 		t.Fatalf("set key: %v", err)
 	}
 
-	llmStub := &stubLLM{resp: sampleResponse()}
+	llmStub := &mock.Provider{AnalyzeResp: sampleResponse()}
 	rawURL := "https://example.com/article?utm_source=x"
 	normalized, _ := articles.NormalizeURL(rawURL)
 
@@ -297,8 +274,8 @@ func TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first analyze: %v", err)
 	}
-	if extractorCalls != 1 || llmStub.calls != 1 {
-		t.Fatalf("first: expected extractor=1 llm=1, got extractor=%d llm=%d", extractorCalls, llmStub.calls)
+	if extractorCalls != 1 || len(llmStub.AnalyzeCalls) != 1 {
+		t.Fatalf("first: expected extractor=1 llm=1, got extractor=%d llm=%d", extractorCalls, len(llmStub.AnalyzeCalls))
 	}
 	if first.Article.CEFRDetected != "B1" {
 		t.Fatalf("expected stored CEFR=B1 (matches active), got %q", first.Article.CEFRDetected)
@@ -313,8 +290,8 @@ func TestAnalyzeArticle_CacheHitOnSameUrlAndCEFR(t *testing.T) {
 	if extractorCalls != 1 {
 		t.Fatalf("cache hit must not call extractor; calls=%d", extractorCalls)
 	}
-	if llmStub.calls != 1 {
-		t.Fatalf("cache hit must not call llm; calls=%d", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 1 {
+		t.Fatalf("cache hit must not call llm; calls=%d", len(llmStub.AnalyzeCalls))
 	}
 	if second.Article.ID != first.Article.ID {
 		t.Fatalf("expected same article id, got %d vs %d", second.Article.ID, first.Article.ID)
@@ -367,7 +344,7 @@ func TestAnalyzeArticle_CacheHitOnCEFRChange(t *testing.T) {
 		t.Fatalf("seed article: %v", err)
 	}
 
-	llmStub := &stubLLM{err: llm.ErrUnavailable}
+	llmStub := &mock.Provider{AnalyzeErr: llm.ErrUnavailable}
 	extractorCalls := 0
 	svc := articles.NewService(articles.ServiceDeps{
 		DB:        db,
@@ -392,8 +369,8 @@ func TestAnalyzeArticle_CacheHitOnCEFRChange(t *testing.T) {
 	if extractorCalls != 0 {
 		t.Fatalf("cache hit must not invoke extractor; calls=%d", extractorCalls)
 	}
-	if llmStub.calls != 0 {
-		t.Fatalf("cache hit must not invoke LLM Analyze; calls=%d", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 0 {
+		t.Fatalf("cache hit must not invoke LLM Analyze; calls=%d", len(llmStub.AnalyzeCalls))
 	}
 	if result.Article.ID != a.ID {
 		t.Fatalf("expected cached article id=%d, got %d", a.ID, result.Article.ID)
@@ -433,8 +410,8 @@ func TestAdapt_FillsMissingLevelAndCachesIt(t *testing.T) {
 		t.Fatalf("seed: %v", err)
 	}
 
-	llmStub := &stubLLM{
-		adaptResp: llm.AdaptResponse{AdaptedText: "fresh B2 body", SummaryTarget: "fresh summary"},
+	llmStub := &mock.Provider{
+		AdaptResp: llm.AdaptResponse{AdaptedText: "fresh B2 body", SummaryTarget: "fresh summary"},
 	}
 	svc := articles.NewService(articles.ServiceDeps{
 		DB:           db,
@@ -456,12 +433,13 @@ func TestAdapt_FillsMissingLevelAndCachesIt(t *testing.T) {
 	if got != "fresh B2 body" {
 		t.Fatalf("Adapt returned %q, want %q", got, "fresh B2 body")
 	}
-	if llmStub.adaptCalls != 1 {
-		t.Fatalf("expected 1 LLM Adapt call, got %d", llmStub.adaptCalls)
+	if len(llmStub.AdaptCalls) != 1 {
+		t.Fatalf("expected 1 LLM Adapt call, got %d", len(llmStub.AdaptCalls))
 	}
 	// The B1 source the LLM saw must be the previously stored adaptation.
-	if llmStub.lastAdaptRequest == nil || llmStub.lastAdaptRequest.SourceText != "old b1 body" || llmStub.lastAdaptRequest.SourceCEFR != "B1" {
-		t.Fatalf("unexpected adapt request: %+v", llmStub.lastAdaptRequest)
+	last := llmStub.AdaptCalls[len(llmStub.AdaptCalls)-1]
+	if last.SourceText != "old b1 body" || last.SourceCEFR != "B1" {
+		t.Fatalf("unexpected adapt request: %+v", last)
 	}
 
 	// The freshly generated B2 must now be merged into the JSON blob.
@@ -482,8 +460,8 @@ func TestAdapt_FillsMissingLevelAndCachesIt(t *testing.T) {
 	if again != "fresh B2 body" {
 		t.Fatalf("cache hit returned %q", again)
 	}
-	if llmStub.adaptCalls != 1 {
-		t.Fatalf("cache hit must not invoke LLM Adapt; calls=%d", llmStub.adaptCalls)
+	if len(llmStub.AdaptCalls) != 1 {
+		t.Fatalf("cache hit must not invoke LLM Adapt; calls=%d", len(llmStub.AdaptCalls))
 	}
 }
 
@@ -512,7 +490,7 @@ func TestAnalyzeArticle_KnownWordsForwarded(t *testing.T) {
 
 	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
 
-	llmStub := &stubLLM{resp: sampleResponse()}
+	llmStub := &mock.Provider{AnalyzeResp: sampleResponse()}
 	svc := articles.NewService(articles.ServiceDeps{
 		DB:           db,
 		Users:        usersSvc,
@@ -531,8 +509,8 @@ func TestAnalyzeArticle_KnownWordsForwarded(t *testing.T) {
 	if err != nil {
 		t.Fatalf("first analyze: %v", err)
 	}
-	if llmStub.lastRequest == nil || len(llmStub.lastRequest.KnownWords) != 0 {
-		t.Fatalf("first call should send empty KnownWords, got %+v", llmStub.lastRequest)
+	if len(llmStub.AnalyzeCalls) == 0 || len(llmStub.AnalyzeCalls[len(llmStub.AnalyzeCalls)-1].KnownWords) != 0 {
+		t.Fatalf("first call should send empty KnownWords, got %+v", llmStub.AnalyzeCalls)
 	}
 
 	// Mark "ipsum" as known and "lorem" as mastered for this user.
@@ -567,10 +545,10 @@ func TestAnalyzeArticle_KnownWordsForwarded(t *testing.T) {
 	if _, err := svc2.AnalyzeArticle(context.Background(), userID, "https://b", nil); err != nil {
 		t.Fatalf("second analyze: %v", err)
 	}
-	if llmStub.lastRequest == nil {
+	if len(llmStub.AnalyzeCalls) == 0 {
 		t.Fatalf("second call did not reach LLM")
 	}
-	got := llmStub.lastRequest.KnownWords
+	got := llmStub.AnalyzeCalls[len(llmStub.AnalyzeCalls)-1].KnownWords
 	want := map[string]bool{"ipsum": true, "lorem": true}
 	if len(got) != len(want) {
 		t.Fatalf("KnownWords len: got %v want %v", got, want)

@@ -9,6 +9,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	"github.com/nikita/tg-linguine/internal/llm"
+	"github.com/nikita/tg-linguine/internal/llm/mock"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -97,7 +98,7 @@ func TestAnalyzeArticle_BlockedSource_NoNetworkCall(t *testing.T) {
 		t.Fatalf("set key: %v", err)
 	}
 
-	llmStub := &stubLLM{resp: sampleResponse()}
+	llmStub := &mock.Provider{AnalyzeResp: sampleResponse()}
 	extractorCalls := 0
 	extractor := stubExtractorFn(func(ctx context.Context, url string) (articles.Extracted, error) {
 		extractorCalls++
@@ -124,8 +125,8 @@ func TestAnalyzeArticle_BlockedSource_NoNetworkCall(t *testing.T) {
 	if extractorCalls != 0 {
 		t.Errorf("extractor must not be invoked when source is blocked, calls=%d", extractorCalls)
 	}
-	if llmStub.calls != 0 {
-		t.Errorf("LLM must not be invoked when source is blocked, calls=%d", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 0 {
+		t.Errorf("LLM must not be invoked when source is blocked, calls=%d", len(llmStub.AnalyzeCalls))
 	}
 
 	var n int
@@ -154,7 +155,7 @@ func TestAnalyzeArticle_LLMSafetyFlags_DropsArticle(t *testing.T) {
 
 	flagged := sampleResponse()
 	flagged.SafetyFlags = []string{"adult"}
-	llmStub := &stubLLM{resp: flagged}
+	llmStub := &mock.Provider{AnalyzeResp: flagged}
 
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
@@ -173,8 +174,8 @@ func TestAnalyzeArticle_LLMSafetyFlags_DropsArticle(t *testing.T) {
 	}
 	// The LLM was invoked exactly once — we cannot avoid that, but we still
 	// must not persist anything once it flags the article.
-	if llmStub.calls != 1 {
-		t.Errorf("LLM should be called once before the safety check, got %d", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 1 {
+		t.Errorf("LLM should be called once before the safety check, got %d", len(llmStub.AnalyzeCalls))
 	}
 
 	for _, q := range []string{
@@ -209,7 +210,7 @@ func TestAnalyzeArticle_BlocklistDoesNotInterfereWithCleanURLs(t *testing.T) {
 		t.Fatalf("set key: %v", err)
 	}
 
-	llmStub := &stubLLM{resp: sampleResponse()}
+	llmStub := &mock.Provider{AnalyzeResp: sampleResponse()}
 	bl := articles.NewBlocklistFromText("only-this-blocked.test\n")
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
@@ -226,8 +227,8 @@ func TestAnalyzeArticle_BlocklistDoesNotInterfereWithCleanURLs(t *testing.T) {
 	if _, err := svc.AnalyzeArticle(context.Background(), userID, "https://allowed.test/post", nil); err != nil {
 		t.Fatalf("clean URL must succeed: %v", err)
 	}
-	if llmStub.calls != 1 {
-		t.Errorf("clean URL should reach LLM, got calls=%d", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 1 {
+		t.Errorf("clean URL should reach LLM, got calls=%d", len(llmStub.AnalyzeCalls))
 	}
 }
 
@@ -248,7 +249,7 @@ func TestAnalyzeArticle_LLMErrorNotConfusedWithSafetyFlag(t *testing.T) {
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://ok.test", URLHash: "h", Title: "t", Content: "body"}},
-		LLM:          &stubLLM{err: llm.ErrRateLimited},
+		LLM:          &mock.Provider{AnalyzeErr: llm.ErrRateLimited},
 		Articles:     articles.NewSQLiteRepository(db),
 		Dictionary:   dictionary.NewSQLiteRepository(db),
 		ArticleWords: dictionary.NewSQLiteArticleWordsRepository(db),

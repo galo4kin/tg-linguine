@@ -1,5 +1,13 @@
 # Releases
 
+## 30.5 — refactor-stub-llm-vs-mock-provider
+Тесты `internal/articles/` переведены с локального `stubLLM` на
+канонический `internal/llm/mock.Provider`. Поля `calls` /
+`lastRequest` / `adaptCalls` / `lastAdaptRequest` заменены на
+`AnalyzeCalls` / `AdaptCalls`, тип `stubLLM` удалён —
+fixture-driven мок теперь единственная точка правды для тестов
+LLM-провайдера. `make build` и `make test` зелёные.
+
 ## 32 — admin-commands
 В боте появились три служебные команды: `/stats` (всего пользователей,
 активных за 24ч/7д, статей всего и за сутки, слов в словаре), `/whoami`

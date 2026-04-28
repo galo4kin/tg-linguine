@@ -10,6 +10,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	"github.com/nikita/tg-linguine/internal/llm"
+	"github.com/nikita/tg-linguine/internal/llm/mock"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -85,7 +86,7 @@ func TestAnalyzeArticle_RejectsLongArticleBeforeLLM(t *testing.T) {
 	// 4001 runes ≈ 1001 tokens — strictly above the limit.
 	body := makeBody(4001)
 
-	llmStub := &stubLLM{resp: sampleResponse()}
+	llmStub := &mock.Provider{AnalyzeResp: sampleResponse()}
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://l", URLHash: "hl", Title: "long", Content: body}},
@@ -120,8 +121,8 @@ func TestAnalyzeArticle_RejectsLongArticleBeforeLLM(t *testing.T) {
 		t.Errorf("Words = %d, expected > 0 for the user-facing message", tooLong.Words)
 	}
 
-	if llmStub.calls != 0 {
-		t.Errorf("LLM was called %d times — must not be invoked when article is rejected", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 0 {
+		t.Errorf("LLM was called %d times — must not be invoked when article is rejected", len(llmStub.AnalyzeCalls))
 	}
 
 	var n int
@@ -155,7 +156,7 @@ func TestAnalyzeArticle_BoundaryAtLimitPasses(t *testing.T) {
 		t.Fatalf("test fixture: EstimateTokens(body) = %d, want %d", got, limit)
 	}
 
-	llmStub := &stubLLM{resp: sampleResponse()}
+	llmStub := &mock.Provider{AnalyzeResp: sampleResponse()}
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://b", URLHash: "hb", Title: "boundary", Content: body}},
@@ -171,8 +172,8 @@ func TestAnalyzeArticle_BoundaryAtLimitPasses(t *testing.T) {
 	if _, err := svc.AnalyzeArticle(context.Background(), userID, "https://b", nil); err != nil {
 		t.Fatalf("boundary article must pass, got err: %v", err)
 	}
-	if llmStub.calls != 1 {
-		t.Errorf("expected LLM call=1 at boundary, got %d", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 1 {
+		t.Errorf("expected LLM call=1 at boundary, got %d", len(llmStub.AnalyzeCalls))
 	}
 }
 
@@ -194,7 +195,7 @@ func TestAnalyzeArticle_DefaultLimitActiveWhenZero(t *testing.T) {
 	// Build an article that exceeds the default 7000-token budget.
 	body := makeBody((articles.DefaultMaxTokensPerArticle + 100) * 4)
 
-	llmStub := &stubLLM{resp: sampleResponse()}
+	llmStub := &mock.Provider{AnalyzeResp: sampleResponse()}
 	svc := articles.NewService(articles.ServiceDeps{
 		DB: db, Users: usersSvc, Languages: langs, Keys: keys,
 		Extractor:    stubExtractor{out: articles.Extracted{URL: "https://huge", URLHash: "hh", Title: "huge", Content: body}},
@@ -212,7 +213,7 @@ func TestAnalyzeArticle_DefaultLimitActiveWhenZero(t *testing.T) {
 	if !errors.Is(err, articles.ErrTooLong) {
 		t.Fatalf("expected ErrTooLong with default limit, got %v", err)
 	}
-	if llmStub.calls != 0 {
-		t.Errorf("LLM must not be invoked on rejected article, calls=%d", llmStub.calls)
+	if len(llmStub.AnalyzeCalls) != 0 {
+		t.Errorf("LLM must not be invoked on rejected article, calls=%d", len(llmStub.AnalyzeCalls))
 	}
 }
