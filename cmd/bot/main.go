@@ -124,6 +124,9 @@ func main() {
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 
+	pingVersion, pingCommit := telegram.BuildInfo(version)
+	tgBot.SendStartupPing(ctx, cfg.AdminUserID, pingVersion, pingCommit, time.Now())
+
 	tgBot.Start(ctx)
 	// Once Start returns, ctx is canceled and the long-poll loop is gone.
 	// Drain any handler goroutines still finishing their work, capped so a

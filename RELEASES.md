@@ -1,5 +1,16 @@
 # Releases
 
+## 33 — admin-startup-ping
+При старте процесса админ (если `ADMIN_USER_ID` задан) получает в личку
+короткое сообщение «🍝 tg-linguine поднялся» с `version`, `commit` и
+временем запуска — чтобы было видно, что watchdog поднял свежий pid и
+какая версия сейчас на проде. Версия и коммит достаются через
+`runtime/debug.ReadBuildInfo()` (без правки Makefile), ошибка отправки
+логируется как `slog.Warn` и не валит процесс. При `ADMIN_USER_ID == 0`
+функция молча возвращается без обращения к Telegram API и без
+предупреждений в логах. Покрыто юнит-тестами в
+`internal/telegram/startup_ping_test.go`.
+
 ## 30.6 — refactor-i18n-middleware-dry
 `i18nMiddleware` в `internal/telegram/bot.go` больше не дублирует
 in-line switch для извлечения языка пользователя — вместо него вызов
