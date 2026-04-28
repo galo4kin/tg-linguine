@@ -74,10 +74,11 @@ func (h *Words) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 		b.AnswerCallbackQuery(ctx, &bot.AnswerCallbackQueryParams{CallbackQueryID: cq.ID})
 	}()
 
-	u, loc, ok := h.resolveUser(ctx, cq)
+	u, ok := resolveCallbackUser(ctx, h.users, cq, h.log, "words cb")
 	if !ok {
 		return
 	}
+	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
 	chatID, msgID, ok := callbackMessageRef(cq)
 	if !ok {
 		return
@@ -126,10 +127,11 @@ func (h *Words) HandleStatusCallback(ctx context.Context, b *bot.Bot, update *mo
 		}
 	}()
 
-	u, loc, ok := h.resolveUser(ctx, cq)
+	u, ok := resolveCallbackUser(ctx, h.users, cq, h.log, "wstat cb")
 	if !ok {
 		return
 	}
+	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
 	chatID, msgID, ok := callbackMessageRef(cq)
 	if !ok {
 		return
@@ -163,18 +165,6 @@ func (h *Words) HandleStatusCallback(ctx context.Context, b *bot.Bot, update *mo
 
 	answer(tgi18n.T(loc, statusConfirmKey(status), nil))
 	h.renderPage(ctx, b, u.ID, loc, chatID, msgID, articleID, page)
-}
-
-func (h *Words) resolveUser(ctx context.Context, cq *models.CallbackQuery) (*users.User, *goi18n.Localizer, bool) {
-	from := cq.From
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("words cb: register", "err", err)
-		return nil, nil, false
-	}
-	return u, tgi18n.For(h.bundle, u.InterfaceLanguage), true
 }
 
 func (h *Words) renderPage(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int, articleID int64, page int) {

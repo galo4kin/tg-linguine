@@ -49,13 +49,9 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 	if msg == nil || msg.From == nil {
 		return
 	}
-	from := msg.From
 
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("url: register user", "err", err)
+	u, ok := resolveMessageUser(ctx, h.users, msg, h.log, "url")
+	if !ok {
 		return
 	}
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)

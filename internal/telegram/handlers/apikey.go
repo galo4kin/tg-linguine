@@ -40,12 +40,8 @@ func (h *APIKey) HandleSetKeyCommand(ctx context.Context, b *bot.Bot, update *mo
 	if update.Message == nil || update.Message.From == nil {
 		return
 	}
-	from := update.Message.From
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("setkey: register", "err", err)
+	u, ok := resolveMessageUser(ctx, h.users, update.Message, h.log, "setkey")
+	if !ok {
 		return
 	}
 	h.waiter.Arm(u.TelegramUserID)
@@ -66,12 +62,8 @@ func (h *APIKey) HandleIncomingText(ctx context.Context, b *bot.Bot, update *mod
 	if !h.waiter.IsArmed(msg.From.ID) {
 		return
 	}
-	from := msg.From
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("apikey ingest: register", "err", err)
+	u, ok := resolveMessageUser(ctx, h.users, msg, h.log, "apikey ingest")
+	if !ok {
 		return
 	}
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)

@@ -1,5 +1,14 @@
 # Releases
 
+## 15.5 — refactor-callback-user-resolve
+В `internal/telegram/handlers/helpers.go` появились две свободные
+функции `resolveCallbackUser` и `resolveMessageUser`, которые
+выполняют общий блок `users.Service.RegisterUser` + логирование
+ошибки. Шесть мест в `onboarding.go`/`url.go`/`apikey.go`/`words.go`
+переписаны на этот хелпер; приватный `(*Words).resolveUser` удалён,
+локализация осталась за вызывающей стороной (`tgi18n.For(bundle,
+u.InterfaceLanguage)`), `make build` и `make test` — зелёные.
+
 ## 15 — word-status
 Под каждым словом в paginated-просмотре появились три inline-кнопки
 «Знаю / Учу / Пропустить» (callback `wstat:<article_id>:<page>:<word_id>:<status>`),

@@ -77,12 +77,8 @@ func (h *Onboarding) HandleLanguage(ctx context.Context, b *bot.Bot, update *mod
 		h.answer(ctx, b, cq.ID)
 		return
 	}
-	from := cq.From
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("onb lang: register", "err", err)
+	u, ok := resolveCallbackUser(ctx, h.users, cq, h.log, "onb lang")
+	if !ok {
 		h.answer(ctx, b, cq.ID)
 		return
 	}
@@ -112,12 +108,8 @@ func (h *Onboarding) HandleLevel(ctx context.Context, b *bot.Bot, update *models
 		h.answer(ctx, b, cq.ID)
 		return
 	}
-	from := cq.From
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID: from.ID, Username: from.Username, FirstName: from.FirstName, LanguageCode: from.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("onb level: register", "err", err)
+	u, ok := resolveCallbackUser(ctx, h.users, cq, h.log, "onb level")
+	if !ok {
 		h.answer(ctx, b, cq.ID)
 		return
 	}
