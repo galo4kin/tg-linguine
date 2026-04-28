@@ -4,6 +4,7 @@ bin/
 *.db-wal
 *.db-shm
 bot.log*
+watchdog.log*
 .env
 .env.local
 .DS_Store

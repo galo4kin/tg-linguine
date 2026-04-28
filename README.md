@@ -39,6 +39,57 @@ make run
 | `make lint` | `go vet` |
 | `make tidy` | `go mod tidy` |
 
+## Деплой на mac mini
+
+Бот живёт прямо в директории репозитория (`~/Projects/tg-linguine` на
+текущей mac mini), бинарь — `bin/tg-linguine`, БД и логи рядом.
+Автоперезапуск — через cron-watchdog `scripts/linguine-watchdog.sh`.
+
+### Первичная настройка
+
+```bash
+cd ~/Projects/tg-linguine
+cp .env.example .env              # заполнить BOT_TOKEN и ENCRYPTION_KEY
+make build                        # собрать bin/tg-linguine
+chmod +x scripts/linguine-watchdog.sh
+```
+
+`ENCRYPTION_KEY` сгенерировать один раз:
+
+```bash
+openssl rand -base64 32
+```
+
+> Бэкап `ENCRYPTION_KEY` обязателен — храните его в менеджере паролей
+> или зашифрованном томе, отдельно от репозитория. Потеря ключа =
+> невозможность расшифровать сохранённые ключи всех пользователей.
+
+### Crontab
+
+`crontab -e` и добавить одну строку:
+
+```
+* * * * * LINGUINE_DIR=~/Projects/tg-linguine LINGUINE_LOG=~/Projects/tg-linguine/watchdog.log ~/Projects/tg-linguine/scripts/linguine-watchdog.sh
+```
+
+Watchdog раз в минуту:
+- если процесс `bin/tg-linguine` не найден — стартует его через `nohup`;
+- если найдено больше одного — убивает все и запускает один;
+- иначе ничего не делает.
+
+Логи watchdog'а пишутся в `watchdog.log` (gitignored), логи самого
+бота — в `bot.log` через `lumberjack` (ротация по размеру).
+
+### Smoke-тест
+
+После добавления крон-строки:
+
+1. В Telegram: `/start` → онбординг → ввести Groq API key → отправить
+   реальный URL статьи → дождаться анализа и пагинации словаря.
+2. `kill -9 $(pgrep -f bin/tg-linguine)` → подождать ≤1 минуты →
+   `pgrep -f bin/tg-linguine` снова возвращает pid.
+3. `sudo reboot` → после загрузки в течение минуты бот снова в живых.
+
 ## Master-ключ шифрования (`ENCRYPTION_KEY`)
 
 API-ключи пользователей (Groq и т.п.) хранятся в БД зашифрованными

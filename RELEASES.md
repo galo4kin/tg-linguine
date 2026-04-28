@@ -1,5 +1,16 @@
 # Releases
 
+## 14 — deploy-v01
+Walking Skeleton поднят на mac mini под cron-watchdog. Добавлен
+`scripts/linguine-watchdog.sh` (адаптация `boltun-watchdog.sh`,
+параметризованная через `LINGUINE_DIR`/`LINGUINE_LOG`, матч по
+`bin/tg-linguine` чтобы не ловить сам watchdog по подстроке имени);
+секция «Деплой на mac mini» в README с генерацией `ENCRYPTION_KEY`,
+бэкапом мастер-ключа, крон-строкой (`~/Projects/tg-linguine` через
+`/bin/sh`-tilde) и smoke-чеклистом (`/start` → онбординг → Groq-key →
+URL, `kill -9` → автоподъём ≤1 мин, reboot). `watchdog.log*` в
+`.gitignore`. Бот живёт в репо-директории, никаких rsync/scp.
+
 ## 13 — pagination-words
 Завершён Walking Skeleton: из article card по кнопке «Показать все
 слова» открывается inline-просмотр по 5 слов за страницу с переводом,
