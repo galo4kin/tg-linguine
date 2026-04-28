@@ -125,6 +125,7 @@ type Service struct {
 	awords    dictionary.ArticleWordsRepository
 	statuses  dictionary.UserWordStatusRepository
 	maxTokens int
+	blocklist *Blocklist
 	log       *slog.Logger
 }
 
@@ -142,6 +143,9 @@ type ServiceDeps struct {
 	// MaxTokens caps the estimated token count of an article before we
 	// invoke the LLM. Zero means use DefaultMaxTokensPerArticle.
 	MaxTokens int
+	// Blocklist gates URLs by host before the network call. Nil means
+	// "no blocking" — used by tests that don't care about safety.
+	Blocklist *Blocklist
 	Log       *slog.Logger
 }
 
@@ -155,6 +159,7 @@ func NewService(d ServiceDeps) *Service {
 		extractor: d.Extractor, llm: d.LLM,
 		articles: d.Articles, dict: d.Dictionary, awords: d.ArticleWords, statuses: d.Statuses,
 		maxTokens: maxTokens,
+		blocklist: d.Blocklist,
 		log:       d.Log,
 	}
 }
@@ -184,6 +189,22 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 			return nil, ErrNoAPIKey
 		}
 		return nil, fmt.Errorf("api key: %w", err)
+	}
+
+	// Source-domain blocklist: enforced BEFORE the cache lookup so a
+	// previously analyzed URL that has since been added to the blocklist
+	// cannot be replayed from cache. The check is host-only — `Contains`
+	// handles subdomain suffix matching internally.
+	if s.blocklist != nil && s.blocklist.MatchURL(url) {
+		if s.log != nil {
+			s.log.Info("article rejected: blocked source",
+				"user_id", userID,
+				"url", url,
+				"extractor_called", false,
+				"reason", "blocked_source_domain",
+			)
+		}
+		return nil, ErrBlockedSource
 	}
 
 	// Cache hit: same user + same normalized URL hash + same target language —
@@ -254,6 +275,23 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 	})
 	if err != nil {
 		return nil, err
+	}
+
+	// LLM-side safety gate: a non-empty `safety_flags` array means the model
+	// itself classified the content as adult / illegal / otherwise unsafe.
+	// We drop the analysis on the floor — nothing is persisted to articles or
+	// dictionary, so a flagged piece never leaks into history or vocabulary.
+	if len(resp.SafetyFlags) > 0 {
+		if s.log != nil {
+			s.log.Info("article rejected: safety flags",
+				"user_id", userID,
+				"url", url,
+				"safety_flags", resp.SafetyFlags,
+				"persisted", false,
+				"reason", "llm_safety_flagged",
+			)
+		}
+		return nil, ErrBlockedContent
 	}
 
 	progress(onProgress, StagePersisting)

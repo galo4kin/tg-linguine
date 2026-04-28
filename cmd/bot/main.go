@@ -9,6 +9,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/nikita/tg-linguine/configs"
 	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/config"
 	"github.com/nikita/tg-linguine/internal/crypto"
@@ -77,6 +78,9 @@ func main() {
 	articleWordsRepo := dictionary.NewSQLiteArticleWordsRepository(db)
 	statusRepo := dictionary.NewSQLiteUserWordStatusRepository(db)
 
+	blocklist := articles.NewBlocklistFromText(configs.BlockedDomainsRaw)
+	log.Info("safety: blocklist loaded", "domains", blocklist.Size())
+
 	articleSvc := articles.NewService(articles.ServiceDeps{
 		DB:           db,
 		Users:        usersSvc,
@@ -89,6 +93,7 @@ func main() {
 		ArticleWords: articleWordsRepo,
 		Statuses:     statusRepo,
 		MaxTokens:    cfg.MaxTokensPerArticle,
+		Blocklist:    blocklist,
 		Log:          log,
 	})
 

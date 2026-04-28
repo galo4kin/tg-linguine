@@ -1,0 +1,20 @@
+# Static domain blocklist for the URL handler.
+#
+# One domain per line. Lines starting with `#` and empty lines are ignored.
+# A subdomain match is implied: an entry "example.com" matches both
+# "example.com" and any "*.example.com" host.
+#
+# This list is intentionally small. The intent is to catch obvious adult /
+# illegal-content domains *before* we make any network request, complementing
+# the safety_flags check that runs after the LLM has read the article.
+
+# Adult-content placeholders (well-known top sites).
+pornhub.com
+xvideos.com
+xhamster.com
+redtube.com
+youporn.com
+
+# Piracy / illegal-content placeholders.
+thepiratebay.org
+1337x.to

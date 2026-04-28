@@ -210,6 +210,10 @@ func articleErrorMessageID(err error) string {
 		return "article.err.not_article"
 	case errors.Is(err, articles.ErrPaywall):
 		return "article.err.paywall"
+	case errors.Is(err, articles.ErrBlockedSource):
+		return "article.err.blocked_source"
+	case errors.Is(err, articles.ErrBlockedContent):
+		return "article.err.blocked_content"
 	case errors.Is(err, llm.ErrInvalidAPIKey):
 		return "apikey.invalid"
 	case errors.Is(err, llm.ErrRateLimited):

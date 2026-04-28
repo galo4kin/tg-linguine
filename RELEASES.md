@@ -1,5 +1,18 @@
 # Releases
 
+## 27 — content-safety
+Появилась статическая защита от adult/illegal-источников: файл
+`configs/blocked_domains.txt` встраивается через `embed`, парсится
+в `articles.Blocklist` (поддомены тоже матчатся, регистр и
+комментарии `#` игнорируются). Проверка домена вшита в
+`AnalyzeArticle` ДО вызова экстрактора (лог
+`extractor_called=false`); после ответа LLM непустой `safety_flags`
+ведёт к `ErrBlockedContent` без записи в `articles`. В URL-handler
+добавлены i18n-сообщения `article.err.blocked_source` и
+`article.err.blocked_content`. Юнит-тесты покрывают парсинг
+блок-листа, поддоменный матч, отсутствие сетевого вызова и пустой
+articles после safety-флага.
+
 ## 26 — long-articles
 Перед обращением к Groq статьи теперь проходят токен-гейт: эвристика
 `EstimateTokens = ⌈runes/4⌉` сравнивается с
