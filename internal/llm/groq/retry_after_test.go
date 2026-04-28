@@ -61,8 +61,8 @@ func TestParseRateLimitRetryAfter_ClampsToMax(t *testing.T) {
 	h := http.Header{}
 	h.Set("Retry-After", "3600")
 	got := parseRateLimitRetryAfter(h, "")
-	if got != maxRetryAfter {
-		t.Errorf("got %v, want clamp to %v", got, maxRetryAfter)
+	if got != MaxRetryAfter {
+		t.Errorf("got %v, want clamp to %v", got, MaxRetryAfter)
 	}
 }
 

@@ -11,6 +11,7 @@ import (
 
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	"github.com/nikita/tg-linguine/internal/llm"
+	"github.com/nikita/tg-linguine/internal/llm/groq"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -27,16 +28,11 @@ var (
 )
 
 // DefaultMaxTokensPerArticle is the fallback used when ServiceDeps.MaxTokens
-// is left at zero. Tuned for Groq's free-tier 12K TPM cap: 5K article body
-// + 4K reserved JSON output + ~1K system prompt + scaffolding fits at ~10K
-// with headroom. Paid-tier deployments can raise MAX_TOKENS_PER_ARTICLE in
-// env to take advantage of the model's 128K context.
-const DefaultMaxTokensPerArticle = 5000
-
-// summarizeInputBudget caps the tokens we feed into the pre-summary call
-// itself. Total request must respect Groq free-tier 12K TPM: 7500 input +
-// ~3500 reserved output + ~500 system prompt ≈ 11.5K, just under the cap.
-const summarizeInputBudget = 7500
+// is left at zero. Sourced from groq.DefaultArticleInputCap so the article
+// input budget tracks the rest of the Groq free-tier TPM math in one place.
+// Paid-tier deployments can raise MAX_TOKENS_PER_ARTICLE in env to take
+// advantage of the model's 128K context.
+const DefaultMaxTokensPerArticle = groq.DefaultArticleInputCap
 
 // LongAnalysisMode is selected by the user when an article exceeds the
 // per-request token budget. Both modes always produce a stored article;
@@ -378,7 +374,7 @@ func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID 
 		// past Groq's TPM ceiling on the way in. TargetTokens is half the
 		// per-article budget so the resulting summary leaves room for the
 		// downstream analyze call (input ≈ summary, output ~3K reserved).
-		summarizeIn, _ := TruncateAtParagraph(extracted.Content, summarizeInputBudget)
+		summarizeIn, _ := TruncateAtParagraph(extracted.Content, groq.SummarizeInputCap)
 		target := s.maxTokens / 2
 		if target < 2000 {
 			target = 2000

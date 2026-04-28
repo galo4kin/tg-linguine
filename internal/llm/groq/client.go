@@ -14,24 +14,6 @@ import (
 	"github.com/nikita/tg-linguine/internal/llm"
 )
 
-// maxRetryAfter caps the wait we'll accept from Groq's Retry-After signal.
-// Anything longer means we should bail out and tell the user to come back
-// later instead of pinning a Telegram handler goroutine for minutes.
-const maxRetryAfter = 60 * time.Second
-
-// retryAfterBuffer is added to Groq's parsed Retry-After hint before
-// sleeping. Groq's number sometimes underestimates by a fraction of a
-// second — the precision is fine, but the rolling-minute window has not
-// quite slid by the time the retry lands. A small buffer keeps a single
-// retry sufficient in practice.
-const retryAfterBuffer = 750 * time.Millisecond
-
-// maxRateLimitAttempts caps the total number of attempts (initial + retries)
-// per chat call. Free-tier Groq sometimes needs two retries when summarize
-// and analyze land in the same TPM minute; four attempts gives us room to
-// recover without ever waiting longer than maxRetryAfter cumulatively.
-const maxRateLimitAttempts = 4
-
 // retryAfterBodyRe pulls a "try again in N.NNs" hint out of Groq's 429
 // JSON body. Groq encodes the precise wait time there (their docs use the
 // same wording for all rate-limit messages), and it's more accurate than
@@ -64,8 +46,8 @@ func parseRateLimitRetryAfter(headers http.Header, body string) time.Duration {
 }
 
 func clampRetryAfter(d time.Duration) time.Duration {
-	if d > maxRetryAfter {
-		return maxRetryAfter
+	if d > MaxRetryAfter {
+		return MaxRetryAfter
 	}
 	return d
 }
@@ -166,22 +148,22 @@ func snapshotErrorBody(resp *http.Response) string {
 	return strings.TrimSpace(string(buf[:n]))
 }
 
-// withRateLimitRetry runs once() up to maxRateLimitAttempts times, sleeping
-// retryAfter+retryAfterBuffer (clamped to maxRetryAfter) between attempts
+// withRateLimitRetry runs once() up to MaxRateLimitAttempts times, sleeping
+// retryAfter+RetryAfterBuffer (clamped to MaxRetryAfter) between attempts
 // when once() reports a rate-limit hint. Non-rate-limit errors are returned
 // immediately. After all attempts are exhausted, llm.ErrRateLimited is
 // returned. logPrefix is the slog message prefix used for the per-retry
 // "<prefix> rate-limit retry" log line (e.g. "groq.chat", "groq.summarize").
 func (c *Client) withRateLimitRetry(ctx context.Context, once func() ([]byte, time.Duration, error), logPrefix string) ([]byte, error) {
-	for attempt := 0; attempt < maxRateLimitAttempts; attempt++ {
+	for attempt := 0; attempt < MaxRateLimitAttempts; attempt++ {
 		raw, retryAfter, err := once()
 		if err == nil {
 			return raw, nil
 		}
-		if attempt < maxRateLimitAttempts-1 && retryAfter > 0 {
-			wait := retryAfter + retryAfterBuffer
-			if wait > maxRetryAfter {
-				wait = maxRetryAfter
+		if attempt < MaxRateLimitAttempts-1 && retryAfter > 0 {
+			wait := retryAfter + RetryAfterBuffer
+			if wait > MaxRetryAfter {
+				wait = MaxRetryAfter
 			}
 			if c.log != nil {
 				c.log.Info(logPrefix+" rate-limit retry",

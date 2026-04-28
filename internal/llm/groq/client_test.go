@@ -123,7 +123,7 @@ func TestWithRateLimitRetry_SucceedsAfterRetry(t *testing.T) {
 }
 
 // TestWithRateLimitRetry_ExhaustsAttempts verifies the loop returns
-// llm.ErrRateLimited once maxRateLimitAttempts is reached, regardless of
+// llm.ErrRateLimited once MaxRateLimitAttempts is reached, regardless of
 // the per-attempt error reported by once().
 func TestWithRateLimitRetry_ExhaustsAttempts(t *testing.T) {
 	t.Parallel()
@@ -136,8 +136,8 @@ func TestWithRateLimitRetry_ExhaustsAttempts(t *testing.T) {
 	if !errors.Is(err, llm.ErrRateLimited) {
 		t.Fatalf("expected ErrRateLimited, got %v", err)
 	}
-	if calls != maxRateLimitAttempts {
-		t.Fatalf("expected %d calls, got %d", maxRateLimitAttempts, calls)
+	if calls != MaxRateLimitAttempts {
+		t.Fatalf("expected %d calls, got %d", MaxRateLimitAttempts, calls)
 	}
 }
 

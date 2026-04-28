@@ -35,13 +35,6 @@ type chatRequest struct {
 	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
-// analyzeMaxCompletionTokens bounds the JSON analysis response. The JSON
-// has summary_target + summary_native + 3 adapted versions + words list +
-// safety flags; with non-trivial vocabulary this comfortably exceeds 3K
-// tokens and trips schema validation when truncated. 4000 leaves room for
-// a complete payload while staying under Groq's free-tier TPM cap.
-const analyzeMaxCompletionTokens = 4000
-
 type chatChoice struct {
 	Message chatMessage `json:"message"`
 }
@@ -113,7 +106,7 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		Model:          model,
 		Messages:       messages,
 		ResponseFormat: chatResponseFormat{Type: "json_object"},
-		MaxTokens:      analyzeMaxCompletionTokens,
+		MaxTokens:      ArticleAnalyzeOutputCap,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("groq: marshal request: %w", err)

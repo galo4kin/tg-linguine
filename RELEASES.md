@@ -1,5 +1,8 @@
 # Releases
 
+## 42.8 — refactor-groq-tpm-constants-colocate
+Константы Groq free-tier TPM-бюджета (`FreeTierTPM`, `DefaultArticleInputCap`, `ArticleAnalyzeOutputCap`, `SummarizeInputCap`, `MaxRetryAfter`, `RetryAfterBuffer`, `MaxRateLimitAttempts`) собраны в `internal/llm/groq/budget.go` с общим комментарием про сходимость 12K. Дубликаты из `analyze.go`, `client.go` и `articles/usecase.go` удалены, articles теперь импортирует `groq` и тянет числа оттуда.
+
 ## 42.7 — refactor-runanalysis-no-double-fetch
 `runAnalysis` теперь принимает `*users.User` и `key string` от верхнего слоя, повторные `users.ByID` и `keys.Get` внутри убраны. `AnalyzeArticle` и `AnalyzeExtracted` резолвят user+ключ один раз и пробрасывают вниз — round-trip к БД и расшифровка ключа выполняются ровно по разу за анализ.
 
