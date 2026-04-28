@@ -5,8 +5,10 @@ import (
 	"database/sql"
 	"errors"
 	"log/slog"
+	"math"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
@@ -29,8 +31,18 @@ type URLHandler struct {
 	languages users.UserLanguageRepository
 	articles  *articles.Service
 	render    *cardRenderer
+	limiter   URLRateLimiter
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
+}
+
+// URLRateLimiter is the small surface the URL handler needs from the
+// transport-level limiter. Defining the interface here keeps the handler
+// package free of any cross-package dependency on the limiter
+// implementation while still letting tests inject a stub.
+type URLRateLimiter interface {
+	Allow(userID int64) (ok bool, retryAfter time.Duration)
+	Capacity() int
 }
 
 func NewURL(
@@ -40,6 +52,7 @@ func NewURL(
 	articleRepo articles.Repository,
 	awords dictionary.ArticleWordsRepository,
 	db *sql.DB,
+	limiter URLRateLimiter,
 	bundle *goi18n.Bundle,
 	log *slog.Logger,
 ) *URLHandler {
@@ -48,6 +61,7 @@ func NewURL(
 		languages: languages,
 		articles:  articleSvc,
 		render:    newCardRenderer(log, articleRepo, awords, articleSvc, db),
+		limiter:   limiter,
 		bundle:    bundle,
 		log:       log,
 	}
@@ -78,6 +92,19 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 	url := urlRe.FindString(msg.Text)
 	if url == "" {
 		return
+	}
+
+	if h.limiter != nil {
+		if ok, retryAfter := h.limiter.Allow(u.ID); !ok {
+			b.SendMessage(ctx, &bot.SendMessageParams{
+				ChatID: msg.Chat.ID,
+				Text: tgi18n.T(loc, "article.err.rate_limited", map[string]int{
+					"Limit":   h.limiter.Capacity(),
+					"Minutes": minutesUntil(retryAfter),
+				}),
+			})
+			return
+		}
 	}
 
 	statusMsg, err := b.SendMessage(ctx, &bot.SendMessageParams{
@@ -145,6 +172,21 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 		result.Article, preview, len(result.Words),
 		view, "url",
 	)
+}
+
+// minutesUntil rounds a "wait this long" duration up to the nearest whole
+// minute, with a floor of 1. The user-facing rate-limit message tells the
+// user how many minutes are left, and zero is misleading when there are
+// still seconds to wait.
+func minutesUntil(d time.Duration) int {
+	if d <= 0 {
+		return 1
+	}
+	mins := int(math.Ceil(d.Minutes()))
+	if mins < 1 {
+		mins = 1
+	}
+	return mins
 }
 
 func articleErrorMessageID(err error) string {

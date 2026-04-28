@@ -24,6 +24,7 @@ article.err.too_large: "Эта страница слишком большая д
 article.err.not_article: "По этой ссылке я не нашёл связной статьи."
 article.err.paywall: "Похоже, статья за paywall."
 article.err.llm_format: "Модель вернула странный ответ. Попробуй ещё раз через минуту."
+article.err.rate_limited: "Лимит {{.Limit}} разборов статей в час исчерпан. Попробуй через ~{{.Minutes}} мин."
 words.page_header: "Слова {{.Page}}/{{.Total}}"
 words.btn.prev: "◀ Назад"
 words.btn.next: "Вперёд ▶"

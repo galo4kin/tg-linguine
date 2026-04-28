@@ -1,5 +1,14 @@
 # Releases
 
+## 25 — rate-limit
+В транспортном слое появился per-user token-bucket
+`internal/telegram/ratelimit.go` (capacity=`RATE_LIMIT_PER_HOUR`,
+дефолт 10; рефилл `1h / capacity`). Лимит применяется только к
+URL-handler (`/start`, settings и прочее свободны); при превышении
+шлём `article.err.rate_limited` с числом минут до следующего слота.
+Покрыто юнит-тестами на исчерпание, частичный/полный рефилл,
+изоляцию между пользователями и nil-safe вызовы.
+
 ## 24 — delete-me
 Появилась команда `/delete_me` и callback-семейство `del:*` —
 GDPR-удаление с обязательным подтверждением. На «Да, удалить» одна

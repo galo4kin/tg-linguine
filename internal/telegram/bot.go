@@ -62,7 +62,8 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	keyWaiter := session.NewAPIKeyWaiter(apiKeyPromptTTL)
 	apiKey := handlers.NewAPIKey(deps.Users, deps.APIKeys, deps.LLMProvider, keyWaiter, deps.Bundle, log)
 
-	urlH := handlers.NewURL(deps.Users, deps.Languages, deps.Articles, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
+	urlLimiter := NewURLRateLimiter(cfg.RateLimitPerHour, time.Hour)
+	urlH := handlers.NewURL(deps.Users, deps.Languages, deps.Articles, deps.ArticleRepo, deps.ArticleWords, deps.DB, urlLimiter, deps.Bundle, log)
 	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	historyH := handlers.NewHistory(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
