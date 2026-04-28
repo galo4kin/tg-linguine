@@ -60,35 +60,16 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 		return "", fmt.Errorf("groq: marshal request: %w", err)
 	}
 
-	for attempt := 0; attempt < maxRateLimitAttempts; attempt++ {
-		out, retryAfter, err := c.chatPlainTextOnce(ctx, key, body)
-		if err == nil {
-			return out, nil
-		}
-		if attempt < maxRateLimitAttempts-1 && retryAfter > 0 {
-			wait := retryAfter + retryAfterBuffer
-			if wait > maxRetryAfter {
-				wait = maxRetryAfter
-			}
-			if c.log != nil {
-				c.log.Info("groq.summarize rate-limit retry",
-					"attempt", attempt+1,
-					"wait_ms", wait.Milliseconds(),
-				)
-			}
-			select {
-			case <-ctx.Done():
-				return "", ctx.Err()
-			case <-time.After(wait):
-			}
-			continue
-		}
+	raw, err := c.withRateLimitRetry(ctx, func() ([]byte, time.Duration, error) {
+		return c.chatPlainTextOnce(ctx, key, body)
+	}, "groq.summarize")
+	if err != nil {
 		return "", err
 	}
-	return "", llm.ErrRateLimited
+	return string(raw), nil
 }
 
-func (c *Client) chatPlainTextOnce(ctx context.Context, key string, body []byte) (string, time.Duration, error) {
+func (c *Client) chatPlainTextOnce(ctx context.Context, key string, body []byte) ([]byte, time.Duration, error) {
 	resp, retries, err := c.doWithRetry(ctx, func() (*http.Request, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.baseURL+"/chat/completions", bytes.NewReader(body))
 		if err != nil {
@@ -106,7 +87,7 @@ func (c *Client) chatPlainTextOnce(ctx context.Context, key string, body []byte)
 				"err", err.Error(),
 			)
 		}
-		return "", 0, err
+		return nil, 0, err
 	}
 	defer func() {
 		io.Copy(io.Discard, resp.Body)
@@ -124,23 +105,23 @@ func (c *Client) chatPlainTextOnce(ctx context.Context, key string, body []byte)
 		}
 		switch {
 		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-			return "", 0, llm.ErrInvalidAPIKey
+			return nil, 0, llm.ErrInvalidAPIKey
 		case resp.StatusCode == http.StatusTooManyRequests:
-			return "", parseRateLimitRetryAfter(resp.Header, errBody), llm.ErrRateLimited
+			return nil, parseRateLimitRetryAfter(resp.Header, errBody), llm.ErrRateLimited
 		default:
-			return "", 0, fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, errBody)
+			return nil, 0, fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, errBody)
 		}
 	}
 
 	var parsed chatResponse
 	if err := json.NewDecoder(resp.Body).Decode(&parsed); err != nil {
-		return "", 0, fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
+		return nil, 0, fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
 	}
 	if len(parsed.Choices) == 0 {
-		return "", 0, fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
+		return nil, 0, fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
 	}
 	if c.log != nil {
 		c.log.Info("groq.summarize ok", "groq_retries", retries)
 	}
-	return parsed.Choices[0].Message.Content, 0, nil
+	return []byte(parsed.Choices[0].Message.Content), 0, nil
 }

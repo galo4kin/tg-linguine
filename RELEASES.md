@@ -1,5 +1,8 @@
 # Releases
 
+## 42.6 — refactor-groq-rate-limit-loop
+Дублирующий retry-loop из `chat()` и `chatPlainText()` свёрнут в общий `Client.withRateLimitRetry` в `internal/llm/groq/client.go`. Sleep+clamp+ctx.Done теперь в одном месте; добавлены unit-тесты на helper (success-after-retry, exhaustion, short-circuit на не-429).
+
 ## 42.5 — refactor-analyzed-article-naming
 Поле `AnalyzedArticle.Article` переименовано в `AnalyzedArticle.Stored`, чтобы убрать каскад `result.Article.Article.*`. Обновлены все потребители: `internal/articles/usecase.go`, `usecase_test.go`, `long_test.go`, `internal/telegram/handlers/url.go`, `long_article.go`. Сборка и тесты зелёные.
 

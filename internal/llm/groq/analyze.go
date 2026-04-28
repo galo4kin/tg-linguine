@@ -119,35 +119,9 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		return nil, fmt.Errorf("groq: marshal request: %w", err)
 	}
 
-	for attempt := 0; attempt < maxRateLimitAttempts; attempt++ {
-		raw, retryAfter, err := c.chatOnce(ctx, key, body)
-		if err == nil {
-			return raw, nil
-		}
-		// Honor Groq's Retry-After up to maxRateLimitAttempts-1 times.
-		// The final attempt's failure surfaces ErrRateLimited so the
-		// Telegram layer can edit the status to "rate limited".
-		if attempt < maxRateLimitAttempts-1 && retryAfter > 0 {
-			wait := retryAfter + retryAfterBuffer
-			if wait > maxRetryAfter {
-				wait = maxRetryAfter
-			}
-			if c.log != nil {
-				c.log.Info("groq.chat rate-limit retry",
-					"attempt", attempt+1,
-					"wait_ms", wait.Milliseconds(),
-				)
-			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(wait):
-			}
-			continue
-		}
-		return nil, err
-	}
-	return nil, llm.ErrRateLimited
+	return c.withRateLimitRetry(ctx, func() ([]byte, time.Duration, error) {
+		return c.chatOnce(ctx, key, body)
+	}, "groq.chat")
 }
 
 // chatOnce executes a single POST to /chat/completions. On a 2xx it returns

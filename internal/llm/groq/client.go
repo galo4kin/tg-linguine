@@ -166,6 +166,41 @@ func snapshotErrorBody(resp *http.Response) string {
 	return strings.TrimSpace(string(buf[:n]))
 }
 
+// withRateLimitRetry runs once() up to maxRateLimitAttempts times, sleeping
+// retryAfter+retryAfterBuffer (clamped to maxRetryAfter) between attempts
+// when once() reports a rate-limit hint. Non-rate-limit errors are returned
+// immediately. After all attempts are exhausted, llm.ErrRateLimited is
+// returned. logPrefix is the slog message prefix used for the per-retry
+// "<prefix> rate-limit retry" log line (e.g. "groq.chat", "groq.summarize").
+func (c *Client) withRateLimitRetry(ctx context.Context, once func() ([]byte, time.Duration, error), logPrefix string) ([]byte, error) {
+	for attempt := 0; attempt < maxRateLimitAttempts; attempt++ {
+		raw, retryAfter, err := once()
+		if err == nil {
+			return raw, nil
+		}
+		if attempt < maxRateLimitAttempts-1 && retryAfter > 0 {
+			wait := retryAfter + retryAfterBuffer
+			if wait > maxRetryAfter {
+				wait = maxRetryAfter
+			}
+			if c.log != nil {
+				c.log.Info(logPrefix+" rate-limit retry",
+					"attempt", attempt+1,
+					"wait_ms", wait.Milliseconds(),
+				)
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(wait):
+			}
+			continue
+		}
+		return nil, err
+	}
+	return nil, llm.ErrRateLimited
+}
+
 // doWithRetry executes build() and retries on transport errors or 5xx
 // responses. 4xx (auth, bad request) is returned immediately without retry —
 // retrying those just burns tokens and time. Returns the last response, the
