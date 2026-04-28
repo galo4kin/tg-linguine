@@ -195,11 +195,13 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		return nil, fmt.Errorf("active language: %w", err)
 	}
 
-	if _, err := s.users.ByID(ctx, userID); err != nil {
+	user, err := s.users.ByID(ctx, userID)
+	if err != nil {
 		return nil, fmt.Errorf("load user: %w", err)
 	}
 
-	if _, err := s.keys.Get(ctx, userID, users.ProviderGroq); err != nil {
+	key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
+	if err != nil {
 		if errors.Is(err, users.ErrNotFound) {
 			return nil, ErrNoAPIKey
 		}
@@ -281,7 +283,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		}}, nil
 	}
 
-	analyzed, err := s.runAnalysis(ctx, userID, active.LanguageCode, active.CEFRLevel, extracted, "", onProgress, start, tokensEstimated)
+	analyzed, err := s.runAnalysis(ctx, userID, user, key, active.LanguageCode, active.CEFRLevel, extracted, "", onProgress, start, tokensEstimated)
 	if err != nil {
 		return nil, err
 	}
@@ -335,6 +337,19 @@ func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID 
 		return nil, fmt.Errorf("active language: %w", err)
 	}
 
+	user, err := s.users.ByID(ctx, userID)
+	if err != nil {
+		return nil, fmt.Errorf("load user: %w", err)
+	}
+
+	key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
+	if err != nil {
+		if errors.Is(err, users.ErrNotFound) {
+			return nil, ErrNoAPIKey
+		}
+		return nil, fmt.Errorf("api key: %w", err)
+	}
+
 	totalWords := ApproxWordCount(extracted.Content)
 	transformed := extracted
 	noticeText := ""
@@ -359,15 +374,6 @@ func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID 
 			)
 		}
 	case ModeSummarize:
-		// Pre-summary needs the API key here so we can send the compress
-		// call before reaching runAnalysis.
-		key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
-		if err != nil {
-			if errors.Is(err, users.ErrNotFound) {
-				return nil, ErrNoAPIKey
-			}
-			return nil, fmt.Errorf("api key: %w", err)
-		}
 		// Cap the input to the summarize call so the request does not blow
 		// past Groq's TPM ceiling on the way in. TargetTokens is half the
 		// per-article budget so the resulting summary leaves room for the
@@ -409,24 +415,17 @@ func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID 
 	}
 
 	tokens := llm.EstimateTokens(transformed.Content)
-	return s.runAnalysis(ctx, userID, active.LanguageCode, active.CEFRLevel, transformed, noticeText, onProgress, start, tokens)
+	return s.runAnalysis(ctx, userID, user, key, active.LanguageCode, active.CEFRLevel, transformed, noticeText, onProgress, start, tokens)
 }
 
 // runAnalysis is the shared back half of the URL pipeline used by both the
 // normal AnalyzeArticle path and the AnalyzeExtracted (truncate/summarize)
 // path. It calls the LLM, persists the result, and returns the freshly-stored
-// article. Caller has already checked language/api-key/blocklist/cache and
-// trimmed the body to the budget.
-func (s *Service) runAnalysis(ctx context.Context, userID int64, languageCode, userCEFR string, extracted Extracted, notice string, onProgress ProgressFunc, start time.Time, tokensEstimated int) (*AnalyzedArticle, error) {
-	user, err := s.users.ByID(ctx, userID)
-	if err != nil {
-		return nil, fmt.Errorf("load user: %w", err)
-	}
-	key, err := s.keys.Get(ctx, userID, users.ProviderGroq)
-	if err != nil {
-		return nil, fmt.Errorf("api key: %w", err)
-	}
-
+// article. Caller has already checked language/api-key/blocklist/cache,
+// resolved the user record + Groq key (passed in here), and trimmed the body
+// to the budget. user and key must be non-nil/non-empty — callers fail-fast
+// upstream when either is missing.
+func (s *Service) runAnalysis(ctx context.Context, userID int64, user *users.User, key string, languageCode, userCEFR string, extracted Extracted, notice string, onProgress ProgressFunc, start time.Time, tokensEstimated int) (*AnalyzedArticle, error) {
 	knownLemmas, err := s.statuses.KnownLemmas(ctx, s.db, userID, languageCode)
 	if err != nil {
 		return nil, fmt.Errorf("known lemmas: %w", err)

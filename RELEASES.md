@@ -1,5 +1,8 @@
 # Releases
 
+## 42.7 — refactor-runanalysis-no-double-fetch
+`runAnalysis` теперь принимает `*users.User` и `key string` от верхнего слоя, повторные `users.ByID` и `keys.Get` внутри убраны. `AnalyzeArticle` и `AnalyzeExtracted` резолвят user+ключ один раз и пробрасывают вниз — round-trip к БД и расшифровка ключа выполняются ровно по разу за анализ.
+
 ## 42.6 — refactor-groq-rate-limit-loop
 Дублирующий retry-loop из `chat()` и `chatPlainText()` свёрнут в общий `Client.withRateLimitRetry` в `internal/llm/groq/client.go`. Sleep+clamp+ctx.Done теперь в одном месте; добавлены unit-тесты на helper (success-after-retry, exhaustion, short-circuit на не-429).
 
