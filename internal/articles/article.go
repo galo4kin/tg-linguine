@@ -20,6 +20,7 @@ type Article struct {
 	SummaryNative   string
 	AdaptedVersions string // JSON blob; absolute-CEFR keyed map (see AdaptedVersions).
 	CategoryID      int64  // 0 = no category
+	Category        string // resolved category code (joined from categories.code), "" when CategoryID = 0
 	CreatedAt       time.Time
 }
 

@@ -178,14 +178,18 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 
 	storedWords := make([]dictionary.DictionaryWord, 0, len(resp.Words))
 
+	// Always normalize to one of CategoryCodes; the LLM occasionally returns
+	// freeform values or omits the field, and downstream filters expect a
+	// known code (or empty for "no category").
+	category := NormalizeCategory(resp.Category)
+
 	err = WithTx(ctx, s.db, func(tx *sql.Tx) error {
-		if resp.Category != "" {
-			catID, err := s.articles.UpsertCategory(ctx, tx, resp.Category)
-			if err != nil {
-				return err
-			}
-			article.CategoryID = catID
+		catID, err := s.articles.UpsertCategory(ctx, tx, category)
+		if err != nil {
+			return err
 		}
+		article.CategoryID = catID
+		article.Category = category
 		if err := s.articles.Insert(ctx, tx, article); err != nil {
 			return err
 		}

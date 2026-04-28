@@ -105,13 +105,25 @@ func (h *History) HandleCallback(ctx context.Context, b *bot.Bot, update *models
 		return
 	case data == "noop":
 		return
-	case strings.HasPrefix(data, "page:"):
-		page, err := strconv.Atoi(strings.TrimPrefix(data, "page:"))
+	case strings.HasPrefix(data, "f:"):
+		// filter+page: hist:f:<category>:<page> ("" category = all).
+		body := strings.TrimPrefix(data, "f:")
+		parts := strings.SplitN(body, ":", 2)
+		if len(parts) != 2 {
+			h.log.Warn("history cb: bad filter payload", "data", cq.Data)
+			return
+		}
+		category, ok := decodeCategoryFilter(parts[0])
+		if !ok {
+			h.log.Warn("history cb: bad category", "data", cq.Data)
+			return
+		}
+		page, err := strconv.Atoi(parts[1])
 		if err != nil {
 			h.log.Warn("history cb: bad page", "data", cq.Data, "err", err)
 			return
 		}
-		h.editPage(ctx, b, chatID, msgID, u.ID, loc, page)
+		h.editPage(ctx, b, chatID, msgID, u.ID, loc, category, page)
 	case strings.HasPrefix(data, "open:"):
 		idStr := strings.TrimPrefix(data, "open:")
 		articleID, err := strconv.ParseInt(idStr, 10, 64)
@@ -130,7 +142,7 @@ func (h *History) HandleCallback(ctx context.Context, b *bot.Bot, update *models
 }
 
 func (h *History) sendPage(ctx context.Context, b *bot.Bot, chatID, userID int64, loc *goi18n.Localizer, page int) {
-	text, markup, ok := h.buildPage(ctx, userID, loc, page)
+	text, markup, ok := h.buildPage(ctx, userID, loc, "", page)
 	if !ok {
 		b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID: chatID,
@@ -145,8 +157,8 @@ func (h *History) sendPage(ctx context.Context, b *bot.Bot, chatID, userID int64
 	})
 }
 
-func (h *History) editPage(ctx context.Context, b *bot.Bot, chatID any, msgID int, userID int64, loc *goi18n.Localizer, page int) {
-	text, markup, ok := h.buildPage(ctx, userID, loc, page)
+func (h *History) editPage(ctx context.Context, b *bot.Bot, chatID any, msgID int, userID int64, loc *goi18n.Localizer, category string, page int) {
+	text, markup, ok := h.buildPage(ctx, userID, loc, category, page)
 	if !ok {
 		return
 	}
@@ -160,14 +172,23 @@ func (h *History) editPage(ctx context.Context, b *bot.Bot, chatID any, msgID in
 	}
 }
 
-func (h *History) buildPage(ctx context.Context, userID int64, loc *goi18n.Localizer, page int) (string, *models.InlineKeyboardMarkup, bool) {
-	total, err := h.articles.CountByUser(ctx, h.db, userID)
+func (h *History) buildPage(ctx context.Context, userID int64, loc *goi18n.Localizer, category string, page int) (string, *models.InlineKeyboardMarkup, bool) {
+	total, err := h.articles.CountByUserAndCategory(ctx, h.db, userID, category)
 	if err != nil {
 		h.log.Error("history: count", "err", err)
 		return "", nil, false
 	}
 	if total == 0 {
-		return tgi18n.T(loc, "history.empty", nil), historyEmptyKeyboard(loc), true
+		// When the user has *zero* articles overall, show the onboarding
+		// message; under a category filter that just has no matches, keep
+		// the category buttons available so they can switch back to All.
+		if category == "" {
+			return tgi18n.T(loc, "history.empty", nil), historyEmptyKeyboard(loc), true
+		}
+		header := tgi18n.T(loc, "history.empty_category", map[string]string{
+			"Category": tgi18n.T(loc, "category."+category, nil),
+		})
+		return header, historyFilterOnlyKeyboard(loc, category), true
 	}
 
 	totalPages := (total + historyPageSize - 1) / historyPageSize
@@ -178,18 +199,25 @@ func (h *History) buildPage(ctx context.Context, userID int64, loc *goi18n.Local
 		page = totalPages - 1
 	}
 
-	rows, err := h.articles.ListByUser(ctx, h.db, userID, historyPageSize, page*historyPageSize)
+	rows, err := h.articles.ListByUserAndCategory(ctx, h.db, userID, category, historyPageSize, page*historyPageSize)
 	if err != nil {
 		h.log.Error("history: list", "err", err)
 		return "", nil, false
 	}
 
-	header := tgi18n.T(loc, "history.header", map[string]int{"Page": page + 1, "Total": totalPages})
-	return header, historyKeyboard(loc, rows, page, totalPages), true
+	header := tgi18n.T(loc, "history.header", map[string]any{
+		"Page":  page + 1,
+		"Total": totalPages,
+	})
+	if category != "" {
+		header += " · " + tgi18n.T(loc, "category."+category, nil)
+	}
+	return header, historyKeyboard(loc, rows, category, page, totalPages), true
 }
 
-func historyKeyboard(loc *goi18n.Localizer, rows []articles.Article, page, totalPages int) *models.InlineKeyboardMarkup {
-	out := make([][]models.InlineKeyboardButton, 0, len(rows)+2)
+func historyKeyboard(loc *goi18n.Localizer, rows []articles.Article, category string, page, totalPages int) *models.InlineKeyboardMarkup {
+	out := make([][]models.InlineKeyboardButton, 0, len(rows)+5)
+	out = append(out, historyCategoryRows(loc, category)...)
 	for _, a := range rows {
 		out = append(out, []models.InlineKeyboardButton{{
 			Text:         historyEntryLabel(a),
@@ -200,12 +228,12 @@ func historyKeyboard(loc *goi18n.Localizer, rows []articles.Article, page, total
 	prev := models.InlineKeyboardButton{Text: tgi18n.T(loc, "history.btn.prev", nil)}
 	next := models.InlineKeyboardButton{Text: tgi18n.T(loc, "history.btn.next", nil)}
 	if page > 0 {
-		prev.CallbackData = fmt.Sprintf("%spage:%d", CallbackPrefixHistory, page-1)
+		prev.CallbackData = historyPageCallback(category, page-1)
 	} else {
 		prev.CallbackData = CallbackPrefixHistory + "noop"
 	}
 	if page < totalPages-1 {
-		next.CallbackData = fmt.Sprintf("%spage:%d", CallbackPrefixHistory, page+1)
+		next.CallbackData = historyPageCallback(category, page+1)
 	} else {
 		next.CallbackData = CallbackPrefixHistory + "noop"
 	}
@@ -228,6 +256,74 @@ func historyEmptyKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 			}},
 		},
 	}
+}
+
+func historyFilterOnlyKeyboard(loc *goi18n.Localizer, category string) *models.InlineKeyboardMarkup {
+	out := historyCategoryRows(loc, category)
+	out = append(out, []models.InlineKeyboardButton{{
+		Text:         tgi18n.T(loc, "history.btn.close", nil),
+		CallbackData: CallbackPrefixHistory + "close",
+	}})
+	return &models.InlineKeyboardMarkup{InlineKeyboard: out}
+}
+
+// historyCategoryRows lays out the All + per-category filter buttons on
+// three rows. The active filter is marked with "✓ " so the user sees which
+// view they are currently in.
+func historyCategoryRows(loc *goi18n.Localizer, current string) [][]models.InlineKeyboardButton {
+	all := append([]string{""}, articles.CategoryCodes...) // "" = All
+	var rows [][]models.InlineKeyboardButton
+	const perRow = 4
+	for i := 0; i < len(all); i += perRow {
+		end := i + perRow
+		if end > len(all) {
+			end = len(all)
+		}
+		row := make([]models.InlineKeyboardButton, 0, end-i)
+		for _, code := range all[i:end] {
+			label := historyCategoryLabel(loc, code)
+			if code == current {
+				label = "✓ " + label
+			}
+			row = append(row, models.InlineKeyboardButton{
+				Text:         label,
+				CallbackData: historyPageCallback(code, 0),
+			})
+		}
+		rows = append(rows, row)
+	}
+	return rows
+}
+
+func historyCategoryLabel(loc *goi18n.Localizer, code string) string {
+	if code == "" {
+		return tgi18n.T(loc, "history.btn.cat_all", nil)
+	}
+	return tgi18n.T(loc, "category."+code, nil)
+}
+
+func historyPageCallback(category string, page int) string {
+	return fmt.Sprintf("%sf:%s:%d", CallbackPrefixHistory, encodeCategoryFilter(category), page)
+}
+
+// encodeCategoryFilter / decodeCategoryFilter swap the empty string for "_"
+// in the wire payload so the colon-separated callback always has the same
+// shape (`f:<token>:<page>`).
+func encodeCategoryFilter(c string) string {
+	if c == "" {
+		return "_"
+	}
+	return c
+}
+
+func decodeCategoryFilter(token string) (string, bool) {
+	if token == "_" {
+		return "", true
+	}
+	if articles.IsCategoryCode(token) {
+		return token, true
+	}
+	return "", false
 }
 
 func historyEntryLabel(a articles.Article) string {

@@ -104,6 +104,11 @@ func renderArticleCard(loc *goi18n.Localizer, article *articles.Article, userCEF
 	if article.CEFRDetected != "" {
 		fmt.Fprintf(&sb, "%s\n", tgi18n.T(loc, "article.card.cefr", map[string]string{"Level": article.CEFRDetected}))
 	}
+	if article.Category != "" {
+		fmt.Fprintf(&sb, "%s\n", tgi18n.T(loc, "article.card.category", map[string]string{
+			"Category": tgi18n.T(loc, "category."+article.Category, nil),
+		}))
+	}
 	sb.WriteString("\n")
 
 	summaryText := article.SummaryTarget

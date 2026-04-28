@@ -1,5 +1,14 @@
 # Releases
 
+## 23 — categories
+LLM-категория статьи теперь нормализуется до одного из 9 канонических
+кодов (Travel/Tech/Politics/Sports/Health/Culture/Business/Science/
+Other) через `articles.NormalizeCategory`; невалидное значение → Other,
+не падаем. В article card отображается локализованная категория, в
+History появилась строка фильтров (All + 9 категорий) с пагинацией
+внутри выбранного фильтра. Добавлена seed-миграция `0006_seed_
+categories` и методы `ListByUserAndCategory` / `CountByUserAndCategory`.
+
 ## 22 — flashcards
 Появилась команда `/study` и callback-семейство `study:*` —
 flashcard-сессии по словам в статусе `learning`. FSM в

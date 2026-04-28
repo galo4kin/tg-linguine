@@ -29,8 +29,15 @@ type Repository interface {
 	// ListByUser returns up to `limit` articles for the user, ordered by
 	// created_at DESC (newest first), starting at `offset`.
 	ListByUser(ctx context.Context, q DBTX, userID int64, limit, offset int) ([]Article, error)
+	// ListByUserAndCategory is ListByUser restricted to a single category
+	// code (one of articles.CategoryCodes). Pass "" to fall back to
+	// ListByUser semantics.
+	ListByUserAndCategory(ctx context.Context, q DBTX, userID int64, category string, limit, offset int) ([]Article, error)
 	// CountByUser returns how many articles the user has stored.
 	CountByUser(ctx context.Context, q DBTX, userID int64) (int, error)
+	// CountByUserAndCategory is CountByUser restricted to a single category
+	// code. Pass "" to fall back to CountByUser semantics.
+	CountByUserAndCategory(ctx context.Context, q DBTX, userID int64, category string) (int, error)
 	// ByUserAndHash looks up an article previously stored for the user under the
 	// same (url_hash, language_code) — returns ErrNotFound if no such row.
 	ByUserAndHash(ctx context.Context, q DBTX, userID int64, urlHash, languageCode string) (*Article, error)
@@ -81,18 +88,19 @@ func (r *sqliteRepo) Insert(ctx context.Context, q DBTX, a *Article) error {
 
 func (r *sqliteRepo) ByID(ctx context.Context, q DBTX, id int64) (*Article, error) {
 	const stmt = `
-		SELECT id, user_id, source_url, source_url_hash, title, language_code,
-		       COALESCE(cefr_detected, ''), COALESCE(summary_target, ''),
-		       COALESCE(summary_native, ''), COALESCE(adapted_versions, ''),
-		       COALESCE(category_id, 0), created_at
-		FROM articles
-		WHERE id = ?
+		SELECT a.id, a.user_id, a.source_url, a.source_url_hash, a.title, a.language_code,
+		       COALESCE(a.cefr_detected, ''), COALESCE(a.summary_target, ''),
+		       COALESCE(a.summary_native, ''), COALESCE(a.adapted_versions, ''),
+		       COALESCE(a.category_id, 0), COALESCE(c.code, ''), a.created_at
+		FROM articles a
+		LEFT JOIN categories c ON c.id = a.category_id
+		WHERE a.id = ?
 	`
 	var a Article
 	err := q.QueryRowContext(ctx, stmt, id).Scan(
 		&a.ID, &a.UserID, &a.SourceURL, &a.SourceURLHash, &a.Title, &a.LanguageCode,
 		&a.CEFRDetected, &a.SummaryTarget, &a.SummaryNative, &a.AdaptedVersions,
-		&a.CategoryID, &a.CreatedAt,
+		&a.CategoryID, &a.Category, &a.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
@@ -104,17 +112,31 @@ func (r *sqliteRepo) ByID(ctx context.Context, q DBTX, id int64) (*Article, erro
 }
 
 func (r *sqliteRepo) ListByUser(ctx context.Context, q DBTX, userID int64, limit, offset int) ([]Article, error) {
-	const stmt = `
-		SELECT id, user_id, source_url, source_url_hash, title, language_code,
-		       COALESCE(cefr_detected, ''), COALESCE(summary_target, ''),
-		       COALESCE(summary_native, ''), COALESCE(adapted_versions, ''),
-		       COALESCE(category_id, 0), created_at
-		FROM articles
-		WHERE user_id = ?
-		ORDER BY created_at DESC, id DESC
-		LIMIT ? OFFSET ?
-	`
-	rows, err := q.QueryContext(ctx, stmt, userID, limit, offset)
+	return r.listByUserCategory(ctx, q, userID, "", limit, offset)
+}
+
+func (r *sqliteRepo) ListByUserAndCategory(ctx context.Context, q DBTX, userID int64, category string, limit, offset int) ([]Article, error) {
+	return r.listByUserCategory(ctx, q, userID, category, limit, offset)
+}
+
+func (r *sqliteRepo) listByUserCategory(ctx context.Context, q DBTX, userID int64, category string, limit, offset int) ([]Article, error) {
+	stmt := `
+		SELECT a.id, a.user_id, a.source_url, a.source_url_hash, a.title, a.language_code,
+		       COALESCE(a.cefr_detected, ''), COALESCE(a.summary_target, ''),
+		       COALESCE(a.summary_native, ''), COALESCE(a.adapted_versions, ''),
+		       COALESCE(a.category_id, 0), COALESCE(c.code, ''), a.created_at
+		FROM articles a
+		LEFT JOIN categories c ON c.id = a.category_id
+		WHERE a.user_id = ?`
+	args := []any{userID}
+	if category != "" {
+		stmt += ` AND c.code = ?`
+		args = append(args, category)
+	}
+	stmt += ` ORDER BY a.created_at DESC, a.id DESC LIMIT ? OFFSET ?`
+	args = append(args, limit, offset)
+
+	rows, err := q.QueryContext(ctx, stmt, args...)
 	if err != nil {
 		return nil, fmt.Errorf("articles: list by user: %w", err)
 	}
@@ -125,7 +147,7 @@ func (r *sqliteRepo) ListByUser(ctx context.Context, q DBTX, userID int64, limit
 		if err := rows.Scan(
 			&a.ID, &a.UserID, &a.SourceURL, &a.SourceURLHash, &a.Title, &a.LanguageCode,
 			&a.CEFRDetected, &a.SummaryTarget, &a.SummaryNative, &a.AdaptedVersions,
-			&a.CategoryID, &a.CreatedAt,
+			&a.CategoryID, &a.Category, &a.CreatedAt,
 		); err != nil {
 			return nil, fmt.Errorf("articles: scan list: %w", err)
 		}
@@ -138,8 +160,26 @@ func (r *sqliteRepo) ListByUser(ctx context.Context, q DBTX, userID int64, limit
 }
 
 func (r *sqliteRepo) CountByUser(ctx context.Context, q DBTX, userID int64) (int, error) {
+	return r.countByUserCategory(ctx, q, userID, "")
+}
+
+func (r *sqliteRepo) CountByUserAndCategory(ctx context.Context, q DBTX, userID int64, category string) (int, error) {
+	return r.countByUserCategory(ctx, q, userID, category)
+}
+
+func (r *sqliteRepo) countByUserCategory(ctx context.Context, q DBTX, userID int64, category string) (int, error) {
+	stmt := `
+		SELECT COUNT(*)
+		FROM articles a
+		LEFT JOIN categories c ON c.id = a.category_id
+		WHERE a.user_id = ?`
+	args := []any{userID}
+	if category != "" {
+		stmt += ` AND c.code = ?`
+		args = append(args, category)
+	}
 	var n int
-	if err := q.QueryRowContext(ctx, `SELECT COUNT(*) FROM articles WHERE user_id = ?`, userID).Scan(&n); err != nil {
+	if err := q.QueryRowContext(ctx, stmt, args...).Scan(&n); err != nil {
 		return 0, fmt.Errorf("articles: count by user: %w", err)
 	}
 	return n, nil
@@ -147,18 +187,19 @@ func (r *sqliteRepo) CountByUser(ctx context.Context, q DBTX, userID int64) (int
 
 func (r *sqliteRepo) ByUserAndHash(ctx context.Context, q DBTX, userID int64, urlHash, languageCode string) (*Article, error) {
 	const stmt = `
-		SELECT id, user_id, source_url, source_url_hash, title, language_code,
-		       COALESCE(cefr_detected, ''), COALESCE(summary_target, ''),
-		       COALESCE(summary_native, ''), COALESCE(adapted_versions, ''),
-		       COALESCE(category_id, 0), created_at
-		FROM articles
-		WHERE user_id = ? AND source_url_hash = ? AND language_code = ?
+		SELECT a.id, a.user_id, a.source_url, a.source_url_hash, a.title, a.language_code,
+		       COALESCE(a.cefr_detected, ''), COALESCE(a.summary_target, ''),
+		       COALESCE(a.summary_native, ''), COALESCE(a.adapted_versions, ''),
+		       COALESCE(a.category_id, 0), COALESCE(c.code, ''), a.created_at
+		FROM articles a
+		LEFT JOIN categories c ON c.id = a.category_id
+		WHERE a.user_id = ? AND a.source_url_hash = ? AND a.language_code = ?
 	`
 	var a Article
 	err := q.QueryRowContext(ctx, stmt, userID, urlHash, languageCode).Scan(
 		&a.ID, &a.UserID, &a.SourceURL, &a.SourceURLHash, &a.Title, &a.LanguageCode,
 		&a.CEFRDetected, &a.SummaryTarget, &a.SummaryNative, &a.AdaptedVersions,
-		&a.CategoryID, &a.CreatedAt,
+		&a.CategoryID, &a.Category, &a.CreatedAt,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, ErrNotFound
