@@ -228,13 +228,7 @@ func chatIDFromUpdate(u *models.Update) int64 {
 
 func (tb *Bot) i18nMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
-		lang := "en"
-		if update.Message != nil && update.Message.From != nil {
-			lang = update.Message.From.LanguageCode
-		} else if update.CallbackQuery != nil {
-			lang = update.CallbackQuery.From.LanguageCode
-		}
-		ctx = tgi18n.WithLocalizer(ctx, tgi18n.For(tb.bundle, lang))
+		ctx = tgi18n.WithLocalizer(ctx, tgi18n.For(tb.bundle, langFromUpdate(update)))
 		next(ctx, b, update)
 	}
 }

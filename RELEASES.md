@@ -1,5 +1,12 @@
 # Releases
 
+## 30.6 — refactor-i18n-middleware-dry
+`i18nMiddleware` в `internal/telegram/bot.go` больше не дублирует
+in-line switch для извлечения языка пользователя — вместо него вызов
+уже существующего хелпера `langFromUpdate(update)`. Источник
+определения языка теперь ровно один; `make build` и `make test`
+зелёные.
+
 ## 30.5 — refactor-stub-llm-vs-mock-provider
 Тесты `internal/articles/` переведены с локального `stubLLM` на
 канонический `internal/llm/mock.Provider`. Поля `calls` /
