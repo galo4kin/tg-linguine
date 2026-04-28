@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	nurl "net/url"
 	"strings"
@@ -26,6 +27,7 @@ type ReadabilityExtractor struct {
 	http        *http.Client
 	maxBodySize int64
 	userAgent   string
+	log         *slog.Logger
 }
 
 type ReadabilityOption func(*ReadabilityExtractor)
@@ -38,6 +40,10 @@ func WithUserAgent(ua string) ReadabilityOption {
 	return func(e *ReadabilityExtractor) { e.userAgent = ua }
 }
 
+func WithLogger(l *slog.Logger) ReadabilityOption {
+	return func(e *ReadabilityExtractor) { e.log = l }
+}
+
 // NewReadabilityExtractor builds an extractor backed by go-readability.
 // `maxBodyBytes` caps the response body to protect against multi-MB pages.
 func NewReadabilityExtractor(timeout time.Duration, maxBodyBytes int64, opts ...ReadabilityOption) *ReadabilityExtractor {
@@ -45,6 +51,7 @@ func NewReadabilityExtractor(timeout time.Duration, maxBodyBytes int64, opts ...
 		http:        &http.Client{Timeout: timeout},
 		maxBodySize: maxBodyBytes,
 		userAgent:   "tg-linguine/1.0 (+https://github.com/nikita/tg-linguine)",
+		log:         slog.Default(),
 	}
 	for _, opt := range opts {
 		opt(e)
@@ -84,16 +91,39 @@ func (e *ReadabilityExtractor) Extract(ctx context.Context, rawURL string) (Extr
 		return Extracted{}, err
 	}
 
+	contentType := resp.Header.Get("Content-Type")
+
 	article, err := readability.FromReader(strings.NewReader(string(body)), parsed)
 	if err != nil {
+		e.log.Warn("articles: readability parse failed",
+			"url", normalized,
+			"status", resp.StatusCode,
+			"content_type", contentType,
+			"body_bytes", len(body),
+			"err", err,
+		)
 		return Extracted{}, fmt.Errorf("%w: readability: %v", ErrNotArticle, err)
 	}
 
 	text := strings.TrimSpace(article.TextContent)
 	if text == "" {
+		e.log.Warn("articles: empty article text (likely SPA or non-article page)",
+			"url", normalized,
+			"status", resp.StatusCode,
+			"content_type", contentType,
+			"body_bytes", len(body),
+			"title", strings.TrimSpace(article.Title),
+			"excerpt_len", len(strings.TrimSpace(article.Excerpt)),
+			"byline", strings.TrimSpace(article.Byline),
+		)
 		return Extracted{}, ErrNotArticle
 	}
 	if len(text) < minArticleChars && looksLikePaywall(text) {
+		e.log.Warn("articles: short text matched paywall hint",
+			"url", normalized,
+			"text_len", len(text),
+			"title", strings.TrimSpace(article.Title),
+		)
 		return Extracted{}, ErrPaywall
 	}
 

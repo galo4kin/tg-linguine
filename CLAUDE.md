@@ -63,10 +63,29 @@ alphabetic sort matches the lifecycle order in any file manager / `ls`.
   leaky abstractions, unused dependencies, package-by-feature
   violations. Write findings to
   `_30_done/NN-<slug>-review.md`. If concrete refactors are worth
-  doing as separate steps, create focused tasks in `_10_todo/` named
-  `NN.5-refactor-<slug>.md` (e.g. `05.5-refactor-config.md`) so the
-  main numbering stays intact.
+  doing as separate steps, create focused tasks in `_10_todo/` so they
+  are picked up FIRST on the next run. Naming: take the smallest
+  numeric prefix currently in `_10_todo/` (call it `NEXT`), use
+  `(NEXT - 1).M-refactor-<slug>.md` where `M` starts at `5` and grows
+  (`5`, `6`, `7`…) when several refactor tasks are queued at once.
+  Example: if the next pending task is `08-foo.md`, the new refactor
+  files are `07.5-refactor-<slug>.md`, `07.6-refactor-<slug>.md`, …
+  This guarantees alphabetic sort puts them before `NEXT` so the next
+  routine run starts with the refactor work.
 - One step = one commit.
+- **Rebuild → restart**: whenever `make build` produces a new
+  `bin/tg-linguine` binary as part of a task (i.e. production code
+  changed, not just tests/docs), kill the running bot so the cron
+  watchdog respawns the new binary on the next tick. Do NOT start
+  the bot manually — the watchdog at `scripts/linguine-watchdog.sh`
+  runs every minute via crontab and is the only legitimate way to
+  start the process. The full sequence is:
+  ```sh
+  pkill -f bin/tg-linguine   # watchdog will restart within 60s
+  ```
+  Verify with `ps aux | grep tg-linguine` after ~70s — a new PID
+  means the new binary is up. Skip the kill only when the change is
+  test-only or docs-only.
 - Sibling reference project: `~/Projects/tg-boltun` (Go, flat layout,
   watchdog in cron). Use it as a reference for the watchdog script,
   deploy flow, and `.gitignore` practices.
