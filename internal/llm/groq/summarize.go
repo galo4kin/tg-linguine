@@ -83,14 +83,7 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 		resp.Body.Close()
 	}()
 
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		// fall through
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return "", llm.ErrInvalidAPIKey
-	case resp.StatusCode == http.StatusTooManyRequests:
-		return "", llm.ErrRateLimited
-	default:
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body := snapshotErrorBody(resp)
 		if c.log != nil {
 			c.log.Warn("groq.summarize non-2xx",
@@ -99,7 +92,14 @@ func (c *Client) chatPlainText(ctx context.Context, key, model string, messages 
 				"errors_total", 1,
 			)
 		}
-		return "", fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, body)
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return "", llm.ErrInvalidAPIKey
+		case resp.StatusCode == http.StatusTooManyRequests:
+			return "", llm.ErrRateLimited
+		default:
+			return "", fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, body)
+		}
 	}
 
 	var parsed chatResponse

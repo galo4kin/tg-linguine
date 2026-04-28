@@ -45,7 +45,7 @@ make run
 | `MAX_ARTICLE_SIZE_KB` | `4096` | Лимит размера скачанной страницы для readability-extractor (Wikipedia featured articles бывают 1–3 MB сырого HTML) |
 | `GROQ_MODEL` | `llama-3.3-70b-versatile` | Имя модели в чат-комплишн вызовах Groq (контекст 128K) |
 | `RATE_LIMIT_PER_HOUR` | `10` | Лимит обрабатываемых URL на пользователя в час |
-| `MAX_TOKENS_PER_ARTICLE` | `6000` | Гейт по эвристике `runes/4`. Если статья длиннее — бот предлагает выбрать: разобрать первую часть (truncation) или сжать перед разбором (LLM pre-summary). Дефолт подобран под Groq free tier (TPM cap = 12000 на запрос, считается input + reserved output): 6K статьи + 3K зарезервированного JSON-ответа + ~1K system prompt ≈ 10K. На paid tier этот лимит можно поднимать. |
+| `MAX_TOKENS_PER_ARTICLE` | `5000` | Гейт по эвристике `runes/4`. Если статья длиннее — бот предлагает выбрать: разобрать первую часть (truncation) или сжать перед разбором (LLM pre-summary). Дефолт подобран под Groq free tier (TPM cap = 12000 на запрос, считается input + reserved output): 5K статьи + 4K зарезервированного JSON-ответа + ~1K system prompt ≈ 10K. На paid tier этот лимит можно поднимать. |
 | `ADMIN_USER_ID` | `0` | Telegram-id админа (см. раздел «Admin»). `0` = админ-функции выключены |
 
 ## Make-цели

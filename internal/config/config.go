@@ -26,10 +26,11 @@ type Config struct {
 	// MaxTokensPerArticle is the per-article extracted-text budget (estimated
 	// tokens) before we ask the LLM to fall back to truncation or pre-summary.
 	// Groq's free tier counts input + reserved output toward a 12K TPM cap;
-	// with ~3K reserved for the JSON response and ~1K of system prompt, 6000
-	// for the article body keeps total request tokens comfortably under 12K.
-	// Paid-tier deployments can raise this value via env.
-	MaxTokensPerArticle int `env:"MAX_TOKENS_PER_ARTICLE" envDefault:"6000"`
+	// with ~4K reserved for the JSON response and ~1K of system prompt, 5000
+	// for the article body keeps total request tokens at ~10K with headroom
+	// for known-words list and a schema-retry attempt. Paid-tier deployments
+	// can raise this value via env.
+	MaxTokensPerArticle int `env:"MAX_TOKENS_PER_ARTICLE" envDefault:"5000"`
 	// AdminUserID is the single Telegram user id allowed to invoke admin
 	// commands (and that receives the startup ping). Zero — the default —
 	// disables all admin functionality entirely.

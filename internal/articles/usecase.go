@@ -27,11 +27,11 @@ var (
 )
 
 // DefaultMaxTokensPerArticle is the fallback used when ServiceDeps.MaxTokens
-// is left at zero. Tuned for Groq's free-tier 12K TPM cap: 6K article body
-// + 3K reserved JSON output + ~1K system prompt + scaffolding fits with a
-// safety margin. Paid-tier deployments can raise MAX_TOKENS_PER_ARTICLE in
+// is left at zero. Tuned for Groq's free-tier 12K TPM cap: 5K article body
+// + 4K reserved JSON output + ~1K system prompt + scaffolding fits at ~10K
+// with headroom. Paid-tier deployments can raise MAX_TOKENS_PER_ARTICLE in
 // env to take advantage of the model's 128K context.
-const DefaultMaxTokensPerArticle = 6000
+const DefaultMaxTokensPerArticle = 5000
 
 // summarizeInputBudget caps the tokens we feed into the pre-summary call
 // itself. Total request must respect Groq free-tier 12K TPM: 7500 input +

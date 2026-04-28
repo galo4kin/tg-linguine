@@ -34,10 +34,12 @@ type chatRequest struct {
 	MaxTokens int `json:"max_tokens,omitempty"`
 }
 
-// analyzeMaxCompletionTokens bounds the JSON analysis response. 3000 is
-// enough for summary_target + summary_native + 3 adapted versions + words
-// list + safety flags while leaving budget room under Groq's 12K TPM cap.
-const analyzeMaxCompletionTokens = 3000
+// analyzeMaxCompletionTokens bounds the JSON analysis response. The JSON
+// has summary_target + summary_native + 3 adapted versions + words list +
+// safety flags; with non-trivial vocabulary this comfortably exceeds 3K
+// tokens and trips schema validation when truncated. 4000 leaves room for
+// a complete payload while staying under Groq's free-tier TPM cap.
+const analyzeMaxCompletionTokens = 4000
 
 type chatChoice struct {
 	Message chatMessage `json:"message"`
@@ -73,6 +75,17 @@ func (c *Client) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest
 	}
 
 	if vErr := llm.ValidateAnalysisJSON(raw); vErr != nil {
+		if c.log != nil {
+			snippet := string(raw)
+			if len(snippet) > 500 {
+				snippet = snippet[:500]
+			}
+			c.log.Warn("groq.analyze schema-retry",
+				"reason", llm.RetryMessage(vErr),
+				"first_response_snippet", snippet,
+				"first_response_len", len(raw),
+			)
+		}
 		retryMessages := append([]chatMessage(nil), messages...)
 		retryMessages = append(retryMessages,
 			chatMessage{Role: "assistant", Content: string(raw)},
@@ -129,14 +142,7 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		resp.Body.Close()
 	}()
 
-	switch {
-	case resp.StatusCode >= 200 && resp.StatusCode < 300:
-		// fall through
-	case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
-		return nil, llm.ErrInvalidAPIKey
-	case resp.StatusCode == http.StatusTooManyRequests:
-		return nil, llm.ErrRateLimited
-	default:
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		body := snapshotErrorBody(resp)
 		if c.log != nil {
 			c.log.Warn("groq.chat non-2xx",
@@ -145,7 +151,14 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 				"errors_total", 1,
 			)
 		}
-		return nil, fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, body)
+		switch {
+		case resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden:
+			return nil, llm.ErrInvalidAPIKey
+		case resp.StatusCode == http.StatusTooManyRequests:
+			return nil, llm.ErrRateLimited
+		default:
+			return nil, fmt.Errorf("%w: status %d: %s", llm.ErrUnavailable, resp.StatusCode, body)
+		}
 	}
 
 	var parsed chatResponse
