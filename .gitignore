@@ -9,4 +9,5 @@ watchdog.log*
 .env.local
 .DS_Store
 vendor/
+.claude/scheduled_tasks.lock
 
