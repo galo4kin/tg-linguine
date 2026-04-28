@@ -1,5 +1,8 @@
 # Releases
 
+## 53 — gamification-storage
+Добавлена per-user таблица `user_progress` (миграция 0008, up/down) с XP, дневным/максимальным стриком и one-shot флагом дневной цели. Новый пакет `internal/progress` инкапсулирует rollover на стыке дней, `RecordCorrect/RecordWrong` и расчёт бонуса; покрыт юнит-тестами на стыки дней, пропуск, повтор цели в тот же день. Конфиг расширен `QUIZ_DAILY_GOAL=20`, `QUIZ_XP_PER_CORRECT=10`, `QUIZ_XP_BONUS_GOAL=50` (имя миграции 0008 — следующее свободное вместо 0006, как было в формулировке).
+
 ## 52 — quiz-mixed-ui
 Снят форсаж `UIMode=poll` из шага 51: внутри одного раунда inline-кнопки и нативные quiz-опросы чередуются 50/50, первая карточка раунда всегда inline для предсказуемого старта. Edge cases уже покрыты в шаге 51 — `polls.DropForUser` при «Завершить» делает поздние `poll_answer` no-op'ами с debug-логом.
 

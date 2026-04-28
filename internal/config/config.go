@@ -38,6 +38,14 @@ type Config struct {
 	// YandexDictAPIKey enables Yandex Dictionary lookups for word translations.
 	// When empty the LLM-generated translation is used as-is.
 	YandexDictAPIKey string `env:"YANDEX_DICT_API_KEY"`
+	// QuizDailyGoal is the number of correct quiz answers per day that
+	// triggers the bonus XP payout. Reset at the day boundary.
+	QuizDailyGoal int `env:"QUIZ_DAILY_GOAL" envDefault:"20"`
+	// QuizXPPerCorrect is the XP awarded for a single correct answer.
+	QuizXPPerCorrect int `env:"QUIZ_XP_PER_CORRECT" envDefault:"10"`
+	// QuizXPBonusGoal is the bonus XP added once per day when the user
+	// reaches QuizDailyGoal correct answers.
+	QuizXPBonusGoal int `env:"QUIZ_XP_BONUS_GOAL" envDefault:"50"`
 }
 
 func Load() (*Config, error) {
