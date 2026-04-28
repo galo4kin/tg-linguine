@@ -174,6 +174,22 @@ func (q *Quiz) RecordAnswer(userID int64, correct, mastered bool) (QuizSnapshot,
 	return quizSnapshotOf(e), true
 }
 
+// RecordSkip advances the cursor without changing the correct/wrong counters.
+func (q *Quiz) RecordSkip(userID int64) (QuizSnapshot, bool) {
+	q.mu.Lock()
+	defer q.mu.Unlock()
+	q.gcLocked()
+	e, ok := q.sessions[userID]
+	if !ok {
+		return QuizSnapshot{}, false
+	}
+	if e.cursor < len(e.deck) {
+		e.cursor++
+		e.updated = q.now()
+	}
+	return quizSnapshotOf(e), true
+}
+
 // End drops the user's session and returns its final snapshot.
 func (q *Quiz) End(userID int64) (QuizSnapshot, bool) {
 	q.mu.Lock()

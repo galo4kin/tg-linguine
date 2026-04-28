@@ -139,6 +139,41 @@ func TestBuildQuizOptions_ShortPoolReturnsFewer(t *testing.T) {
 	}
 }
 
+func TestQuiz_RecordSkipAdvancesWithoutCounting(t *testing.T) {
+	q := session.NewQuiz(0)
+	q.Start(1, []session.QuizCard{
+		{DictionaryWordID: 10, Lemma: "house"},
+		{DictionaryWordID: 20, Lemma: "run"},
+	})
+
+	snap, ok := q.RecordSkip(1)
+	if !ok {
+		t.Fatal("expected ok=true for existing session")
+	}
+	if snap.Cursor != 1 {
+		t.Fatalf("cursor should advance to 1, got %d", snap.Cursor)
+	}
+	if snap.Correct != 0 || snap.Wrong != 0 {
+		t.Fatalf("skip must not change counters: correct=%d wrong=%d", snap.Correct, snap.Wrong)
+	}
+
+	// Second skip reaches Done.
+	snap, _ = q.RecordSkip(1)
+	if !snap.Done() {
+		t.Fatalf("expected Done after skipping all cards, cursor=%d len=%d", snap.Cursor, len(snap.Deck))
+	}
+	if snap.Correct != 0 || snap.Wrong != 0 {
+		t.Fatalf("counters must stay zero after two skips: %+v", snap)
+	}
+}
+
+func TestQuiz_RecordSkipNoSessionReturnsFalse(t *testing.T) {
+	q := session.NewQuiz(0)
+	if _, ok := q.RecordSkip(99); ok {
+		t.Fatal("RecordSkip for unknown user must return ok=false")
+	}
+}
+
 func TestPickQuizDirectionAndUIMode_Distribute(t *testing.T) {
 	rng := rand.New(rand.NewSource(7))
 	dirCounts := map[session.QuizDirection]int{}

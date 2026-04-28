@@ -239,6 +239,40 @@ func TestUserWordStatus_Upsert(t *testing.T) {
 	}
 }
 
+func TestUserWordStatus_DeleteWordStatus_RemovesRow(t *testing.T) {
+	db := newTestDB(t)
+	dict := dictionary.NewSQLiteRepository(db)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	wid, _ := dict.UpsertLemma(ctx, db, dictionary.DictionaryWord{LanguageCode: "en", Lemma: "river"})
+	if err := statuses.Upsert(ctx, db, dictionary.UserWordStatus{
+		UserID: 1, DictionaryWordID: wid, Status: dictionary.StatusLearning,
+	}); err != nil {
+		t.Fatalf("upsert: %v", err)
+	}
+
+	if err := statuses.DeleteWordStatus(ctx, db, 1, wid); err != nil {
+		t.Fatalf("delete: %v", err)
+	}
+
+	_, err := statuses.Get(ctx, db, 1, wid)
+	if !errors.Is(err, dictionary.ErrNotFound) {
+		t.Fatalf("expected ErrNotFound after delete, got: %v", err)
+	}
+}
+
+func TestUserWordStatus_DeleteWordStatus_MissingRowIsNoop(t *testing.T) {
+	db := newTestDB(t)
+	statuses := dictionary.NewSQLiteUserWordStatusRepository(db)
+	ctx := context.Background()
+
+	// Deleting a non-existent row must not return an error.
+	if err := statuses.DeleteWordStatus(ctx, db, 1001, 9999); err != nil {
+		t.Fatalf("expected no error deleting non-existent row, got: %v", err)
+	}
+}
+
 func TestUserWordStatus_PageUserWords_FiltersAndOrder(t *testing.T) {
 	db := newTestDB(t)
 	dict := dictionary.NewSQLiteRepository(db)

@@ -95,6 +95,9 @@ type UserWordStatusRepository interface {
 	RecordCorrect(ctx context.Context, q DBTX, userID, wordID int64, threshold int) (newStreak int, mastered bool, err error)
 	// RecordWrong resets correct_streak to 0 and increments wrong_total.
 	RecordWrong(ctx context.Context, q DBTX, userID, wordID int64) error
+	// DeleteWordStatus removes the user's status row for the given word.
+	// Deleting a row that does not exist is not an error.
+	DeleteWordStatus(ctx context.Context, q DBTX, userID, wordID int64) error
 	// SampleDistractors returns up to `n` unique strings to use as wrong-answer
 	// options in a quiz card. Direction picks the answer space:
 	// DistractorForeignToNative draws native translations from article_words,
@@ -505,6 +508,14 @@ func (r *sqliteStatusRepo) RecordWrong(ctx context.Context, q DBTX, userID, word
 	}
 	if n, err := res.RowsAffected(); err == nil && n == 0 {
 		return ErrNotFound
+	}
+	return nil
+}
+
+func (r *sqliteStatusRepo) DeleteWordStatus(ctx context.Context, q DBTX, userID, wordID int64) error {
+	const stmt = `DELETE FROM user_word_status WHERE user_id = ? AND dictionary_word_id = ?`
+	if _, err := q.ExecContext(ctx, stmt, userID, wordID); err != nil {
+		return fmt.Errorf("dictionary: delete word status: %w", err)
 	}
 	return nil
 }

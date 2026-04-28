@@ -128,6 +128,10 @@ func (h *Study) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 		h.endAndSummarize(ctx, b, u.ID, loc, chatID, msgID)
 	case payload == "next":
 		h.renderState(ctx, b, u.ID, loc, chatID, msgID)
+	case payload == "skip":
+		h.handleSkip(ctx, b, u.ID, loc, chatID, msgID)
+	case strings.HasPrefix(payload, "del:"):
+		h.handleDelete(ctx, b, u.ID, loc, chatID, msgID, payload)
 	case strings.HasPrefix(payload, "ans:"):
 		h.handleAnswer(ctx, b, u.ID, loc, chatID, msgID, payload)
 	default:
@@ -208,7 +212,55 @@ func (h *Study) handleAnswer(ctx context.Context, b *bot.Bot, userID int64, loc 
 	// Show feedback for this card with a "Next" button before advancing the
 	// rendered card. The FSM cursor has already advanced; we render the
 	// feedback off `card` (the answered one) and `optIdx` (the user's choice).
-	h.editTo(ctx, b, chatID, msgID, renderQuizFeedback(loc, snap, card, optIdx, correct, mastered), quizFeedbackKeyboard(loc))
+	h.editToHTML(ctx, b, chatID, msgID, renderQuizFeedback(loc, snap, card, optIdx, correct, mastered), quizFeedbackKeyboard(loc))
+}
+
+func (h *Study) handleSkip(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
+	snap, ok := h.fsm.Snapshot(userID)
+	if !ok {
+		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
+		return
+	}
+	if snap.Done() {
+		h.renderState(ctx, b, userID, loc, chatID, msgID)
+		return
+	}
+	card := snap.Current()
+	if _, ok := h.fsm.RecordSkip(userID); !ok {
+		return
+	}
+	h.editToHTML(ctx, b, chatID, msgID, renderQuizSkipFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
+}
+
+func (h *Study) handleDelete(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int, payload string) {
+	wordIDStr := strings.TrimPrefix(payload, "del:")
+	wordID, err := strconv.ParseInt(wordIDStr, 10, 64)
+	if err != nil {
+		h.log.Warn("quiz cb: bad delete payload", "payload", payload)
+		return
+	}
+	snap, ok := h.fsm.Snapshot(userID)
+	if !ok {
+		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
+		return
+	}
+	if snap.Done() {
+		h.renderState(ctx, b, userID, loc, chatID, msgID)
+		return
+	}
+	if snap.Current().DictionaryWordID != wordID {
+		h.renderState(ctx, b, userID, loc, chatID, msgID)
+		return
+	}
+	card := snap.Current()
+	if err := h.statuses.DeleteWordStatus(ctx, h.db, userID, wordID); err != nil {
+		h.log.Error("quiz cb: delete word status", "err", err)
+		return
+	}
+	if _, ok := h.fsm.RecordSkip(userID); !ok {
+		return
+	}
+	h.editToHTML(ctx, b, chatID, msgID, renderQuizDeleteFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
 }
 
 func (h *Study) renderState(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
@@ -242,6 +294,18 @@ func (h *Study) editTo(ctx context.Context, b *bot.Bot, chatID any, msgID int, t
 		ReplyMarkup: kb,
 	}); err != nil {
 		h.log.Debug("quiz: edit", "err", err)
+	}
+}
+
+func (h *Study) editToHTML(ctx context.Context, b *bot.Bot, chatID any, msgID int, text string, kb *models.InlineKeyboardMarkup) {
+	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
+		ChatID:      chatID,
+		MessageID:   msgID,
+		Text:        text,
+		ParseMode:   models.ParseModeHTML,
+		ReplyMarkup: kb,
+	}); err != nil {
+		h.log.Debug("quiz: edit html", "err", err)
 	}
 }
 
@@ -294,11 +358,16 @@ func (h *Study) buildDeck(ctx context.Context, userID int64) ([]session.QuizCard
 			dir = dictionary.DistractorNativeToForeign
 			correct = e.Lemma
 		}
+		// Multi-word answers don't fit the compact 2×2 button layout.
+		if strings.ContainsAny(correct, " \t\n") {
+			continue
+		}
 		distractors, err := h.statuses.SampleDistractors(ctx, h.db, userID, active.LanguageCode, e.DictionaryWordID, correct, dir, 3)
 		if err != nil {
 			h.log.Error("quiz: sample distractors", "err", err)
 			continue
 		}
+		distractors = filterSingleWord(distractors)
 		if len(distractors) < 3 {
 			// Not enough variety in this user's language yet — skip rather
 			// than showing a 2-option "quiz".
@@ -358,49 +427,52 @@ func renderQuizQuestion(loc *goi18n.Localizer, snap session.QuizSnapshot) string
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+// renderQuizFeedback returns an HTML-formatted feedback message.
 func renderQuizFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card session.QuizCard, picked int, correct, mastered bool) string {
 	var sb strings.Builder
-	// `snap` is the pre-answer snapshot, so its cursor still points at the
-	// just-answered card; matching the question header is +1 (1-based).
 	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "quiz.card.header", map[string]int{
 		"Index": snap.Cursor + 1,
 		"Total": len(snap.Deck),
 	}))
+	sb.WriteString("<code>")
 	switch card.Direction {
 	case session.QuizForeignToNative:
-		sb.WriteString(card.Lemma)
+		sb.WriteString(htmlEscape(card.Lemma))
 		if card.POS != "" {
-			fmt.Fprintf(&sb, " (%s)", card.POS)
+			fmt.Fprintf(&sb, " (%s)", htmlEscape(card.POS))
 		}
 		if card.TranscriptionIPA != "" {
-			fmt.Fprintf(&sb, " /%s/", card.TranscriptionIPA)
+			fmt.Fprintf(&sb, " /%s/", htmlEscape(card.TranscriptionIPA))
 		}
 	case session.QuizNativeToForeign:
-		sb.WriteString(card.TranslationNative)
+		sb.WriteString(htmlEscape(card.TranslationNative))
 	}
+	sb.WriteString("</code>")
 	sb.WriteString("\n\n")
 	if correct {
 		sb.WriteString(tgi18n.T(loc, "quiz.feedback.correct", nil))
 	} else {
 		sb.WriteString(tgi18n.T(loc, "quiz.feedback.wrong", map[string]any{
-			"Picked":  card.Options[picked],
-			"Correct": card.Options[card.CorrectIndex],
+			"Picked":  htmlEscape(card.Options[picked]),
+			"Correct": htmlEscape(card.Options[card.CorrectIndex]),
 		}))
 	}
 	if mastered {
 		sb.WriteString("\n")
-		sb.WriteString(tgi18n.T(loc, "quiz.feedback.mastered", map[string]any{"Lemma": card.Lemma}))
+		sb.WriteString(tgi18n.T(loc, "quiz.feedback.mastered", map[string]any{"Lemma": htmlEscape(card.Lemma)}))
 	}
 	if card.ExampleTarget != "" || card.ExampleNative != "" {
-		sb.WriteString("\n\n")
-		sb.WriteString(tgi18n.T(loc, "quiz.feedback.example_header", nil))
-		sb.WriteString("\n")
+		sb.WriteString("\n\n<blockquote>")
 		if card.ExampleTarget != "" {
-			fmt.Fprintf(&sb, "%s\n", card.ExampleTarget)
+			sb.WriteString(htmlEscape(card.ExampleTarget))
+			if card.ExampleNative != "" {
+				sb.WriteString("\n")
+			}
 		}
 		if card.ExampleNative != "" {
-			sb.WriteString(card.ExampleNative)
+			sb.WriteString(htmlEscape(card.ExampleNative))
 		}
+		sb.WriteString("</blockquote>")
 	}
 	return strings.TrimRight(sb.String(), "\n")
 }
@@ -429,18 +501,99 @@ func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot) string 
 	return strings.TrimRight(sb.String(), "\n")
 }
 
+func filterSingleWord(items []string) []string {
+	out := make([]string, 0, len(items))
+	for _, s := range items {
+		if !strings.ContainsAny(s, " \t\n") {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
+func renderQuizSkipFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card session.QuizCard) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "quiz.card.header", map[string]int{
+		"Index": snap.Cursor + 1,
+		"Total": len(snap.Deck),
+	}))
+	sb.WriteString("<code>")
+	switch card.Direction {
+	case session.QuizForeignToNative:
+		sb.WriteString(htmlEscape(card.Lemma))
+		if card.POS != "" {
+			fmt.Fprintf(&sb, " (%s)", htmlEscape(card.POS))
+		}
+		if card.TranscriptionIPA != "" {
+			fmt.Fprintf(&sb, " /%s/", htmlEscape(card.TranscriptionIPA))
+		}
+	case session.QuizNativeToForeign:
+		sb.WriteString(htmlEscape(card.TranslationNative))
+	}
+	sb.WriteString("</code>")
+	sb.WriteString("\n\n")
+	sb.WriteString(tgi18n.T(loc, "quiz.feedback.skipped", map[string]any{
+		"Correct": htmlEscape(card.Options[card.CorrectIndex]),
+	}))
+	if card.ExampleTarget != "" || card.ExampleNative != "" {
+		sb.WriteString("\n\n<blockquote>")
+		if card.ExampleTarget != "" {
+			sb.WriteString(htmlEscape(card.ExampleTarget))
+			if card.ExampleNative != "" {
+				sb.WriteString("\n")
+			}
+		}
+		if card.ExampleNative != "" {
+			sb.WriteString(htmlEscape(card.ExampleNative))
+		}
+		sb.WriteString("</blockquote>")
+	}
+	return strings.TrimRight(sb.String(), "\n")
+}
+
+func renderQuizDeleteFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card session.QuizCard) string {
+	var sb strings.Builder
+	fmt.Fprintf(&sb, "%s\n\n", tgi18n.T(loc, "quiz.card.header", map[string]int{
+		"Index": snap.Cursor + 1,
+		"Total": len(snap.Deck),
+	}))
+	sb.WriteString("<code>")
+	switch card.Direction {
+	case session.QuizForeignToNative:
+		sb.WriteString(htmlEscape(card.Lemma))
+		if card.POS != "" {
+			fmt.Fprintf(&sb, " (%s)", htmlEscape(card.POS))
+		}
+	case session.QuizNativeToForeign:
+		sb.WriteString(htmlEscape(card.TranslationNative))
+	}
+	sb.WriteString("</code>")
+	sb.WriteString("\n\n")
+	sb.WriteString(tgi18n.T(loc, "quiz.feedback.deleted", nil))
+	return sb.String()
+}
+
 func quizQuestionKeyboard(loc *goi18n.Localizer, snap session.QuizSnapshot) *models.InlineKeyboardMarkup {
 	c := snap.Current()
-	rows := make([][]models.InlineKeyboardButton, 0, len(c.Options)+1)
-	for i, opt := range c.Options {
-		rows = append(rows, []models.InlineKeyboardButton{{
-			Text:         opt,
+	rows := make([][]models.InlineKeyboardButton, 0, 3) // 2 answer rows + 1 control row
+	for i := 0; i < len(c.Options); i += 2 {
+		row := []models.InlineKeyboardButton{{
+			Text:         c.Options[i],
 			CallbackData: fmt.Sprintf("%sans:%d:%d", CallbackPrefixStudy, c.DictionaryWordID, i),
-		}})
+		}}
+		if i+1 < len(c.Options) {
+			row = append(row, models.InlineKeyboardButton{
+				Text:         c.Options[i+1],
+				CallbackData: fmt.Sprintf("%sans:%d:%d", CallbackPrefixStudy, c.DictionaryWordID, i+1),
+			})
+		}
+		rows = append(rows, row)
 	}
-	rows = append(rows, []models.InlineKeyboardButton{{
-		Text: tgi18n.T(loc, "quiz.btn.end", nil), CallbackData: CallbackPrefixStudy + "end",
-	}})
+	rows = append(rows, []models.InlineKeyboardButton{
+		{Text: tgi18n.T(loc, "quiz.btn.skip", nil), CallbackData: CallbackPrefixStudy + "skip"},
+		{Text: tgi18n.T(loc, "quiz.btn.del", nil), CallbackData: fmt.Sprintf("%sdel:%d", CallbackPrefixStudy, c.DictionaryWordID)},
+		{Text: tgi18n.T(loc, "quiz.btn.end", nil), CallbackData: CallbackPrefixStudy + "end"},
+	})
 	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
