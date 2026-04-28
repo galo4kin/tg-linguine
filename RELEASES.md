@@ -1,5 +1,8 @@
 # Releases
 
+## 42.9 — refactor-groq-schema-retry-helper
+Общий цикл «провалидировать → при ошибке retry с assistant+user-сообщением → провалидировать ещё раз» вынесен в `Client.chatJSONWithSchemaRetry` (`internal/llm/groq/schema_retry.go`). `Analyze` и `Adapt` теперь сворачиваются до подготовки messages и вызова helper'а; diagnostic-лог `<label> schema-retry` (snippet/len/reason) автоматически работает и для Adapt.
+
 ## 42.8 — refactor-groq-tpm-constants-colocate
 Константы Groq free-tier TPM-бюджета (`FreeTierTPM`, `DefaultArticleInputCap`, `ArticleAnalyzeOutputCap`, `SummarizeInputCap`, `MaxRetryAfter`, `RetryAfterBuffer`, `MaxRateLimitAttempts`) собраны в `internal/llm/groq/budget.go` с общим комментарием про сходимость 12K. Дубликаты из `analyze.go`, `client.go` и `articles/usecase.go` удалены, articles теперь импортирует `groq` и тянет числа оттуда.
 

@@ -63,35 +63,9 @@ func (c *Client) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest
 		{Role: "user", Content: userPrompt},
 	}
 
-	raw, err := c.chat(ctx, key, model, messages)
+	raw, err := c.chatJSONWithSchemaRetry(ctx, key, model, messages, llm.ValidateAnalysisJSON, "groq.analyze")
 	if err != nil {
 		return llm.AnalyzeResponse{}, err
-	}
-
-	if vErr := llm.ValidateAnalysisJSON(raw); vErr != nil {
-		if c.log != nil {
-			snippet := string(raw)
-			if len(snippet) > 500 {
-				snippet = snippet[:500]
-			}
-			c.log.Warn("groq.analyze schema-retry",
-				"reason", llm.RetryMessage(vErr),
-				"first_response_snippet", snippet,
-				"first_response_len", len(raw),
-			)
-		}
-		retryMessages := append([]chatMessage(nil), messages...)
-		retryMessages = append(retryMessages,
-			chatMessage{Role: "assistant", Content: string(raw)},
-			chatMessage{Role: "user", Content: "Your previous response failed schema validation: " + llm.RetryMessage(vErr) + ". Reply again with a single JSON object that strictly matches the schema. No prose, no markdown."},
-		)
-		raw, err = c.chat(ctx, key, model, retryMessages)
-		if err != nil {
-			return llm.AnalyzeResponse{}, err
-		}
-		if vErr2 := llm.ValidateAnalysisJSON(raw); vErr2 != nil {
-			return llm.AnalyzeResponse{}, vErr2
-		}
 	}
 
 	var out llm.AnalyzeResponse
