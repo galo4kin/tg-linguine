@@ -222,6 +222,13 @@ func articleErrorMessageID(err error) string {
 		return "apikey.unavailable"
 	case errors.Is(err, llm.ErrSchemaInvalid):
 		return "article.err.llm_format"
+	case errors.Is(err, articles.ErrNoSourceText):
+		// Empty adapted_versions on a stored article — treat as a degraded
+		// LLM response and surface the same diagnosable message as a
+		// schema-invalid one. New analyses can't reach this branch after
+		// the schema requires non-empty `adapted_versions.current`, but
+		// articles persisted before that fix can.
+		return "article.err.llm_format"
 	default:
 		return "error.generic"
 	}

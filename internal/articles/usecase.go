@@ -405,7 +405,16 @@ func (s *Service) Adapt(ctx context.Context, userID, articleID int64, targetLeve
 
 	sourceText, sourceCEFR := pickAdaptSource(current, targetLevel, article.CEFRDetected)
 	if sourceText == "" {
-		return "", ErrNoSourceText
+		// Soft migration for articles persisted before adapted_versions.current
+		// was required to be non-empty: fall back to the article's own target-
+		// language summary as a regen source. summary_target is required by the
+		// schema, so it is guaranteed non-empty for any stored article. Without
+		// this fallback those records would be permanently unrenderable.
+		if article.SummaryTarget == "" {
+			return "", ErrNoSourceText
+		}
+		sourceText = article.SummaryTarget
+		sourceCEFR = article.CEFRDetected
 	}
 
 	resp, err := s.llm.Adapt(ctx, key, llm.AdaptRequest{

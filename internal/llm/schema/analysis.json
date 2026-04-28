@@ -26,7 +26,7 @@
       "required": ["lower", "current", "higher"],
       "properties": {
         "lower":   { "type": "string" },
-        "current": { "type": "string" },
+        "current": { "type": "string", "minLength": 1 },
         "higher":  { "type": "string" }
       }
     },

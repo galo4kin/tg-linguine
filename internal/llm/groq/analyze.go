@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -135,7 +134,7 @@ func (c *Client) chat(ctx context.Context, key, model string, messages []chatMes
 		return nil, fmt.Errorf("%w: decode chat response: %v", llm.ErrUnavailable, err)
 	}
 	if len(parsed.Choices) == 0 {
-		return nil, errors.New("groq: empty choices")
+		return nil, fmt.Errorf("%w: empty choices", llm.ErrUnavailable)
 	}
 	if c.log != nil {
 		c.log.Info("groq.chat ok", "groq_retries", retries)
