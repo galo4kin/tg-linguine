@@ -1,5 +1,8 @@
 # Releases
 
+## 55 — quiz-cleanup-and-help
+Опубликовано меню slash-команд через `bot.SetMyCommands` в трёх локалях (en/ru/es) — `/study`, `/me`, `/mywords`, `/history`, `/settings`, `/setkey`, `/delete_me`. README обновлён под новый /study и `/me`, в таблицу env добавлены `QUIZ_DAILY_GOAL`, `QUIZ_XP_PER_CORRECT`, `QUIZ_XP_BONUS_GOAL`. Мёртвого кода флэшкарточного режима не обнаружено; код-ревью всей фичи лежит в `_30_done/55-quiz-cleanup-and-help-review.md`.
+
 ## 54 — quiz-progress-and-summary
 Геймификация подключена к квизу: `RolloverIfNewDay` срабатывает в начале раунда, `RecordCorrect/RecordWrong` пишутся на каждый ответ (inline и poll). В фидбэке появляется `+10 XP` (и одноразовый бонус `🎯 +50 XP` при достижении дневной цели), summary раунда расширен строками XP, стрика и цели. Добавлена команда `/me` (`internal/telegram/handlers/me.go`) и i18n-ключи `quiz.feedback.xp/goal_hit`, `quiz.summary.xp/streak/goal`, `me.title/active_language/xp/streak/goal` для en/es/ru.
 

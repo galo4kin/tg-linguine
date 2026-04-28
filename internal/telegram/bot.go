@@ -167,6 +167,57 @@ func (tb *Bot) Start(ctx context.Context) {
 	tb.b.Start(ctx)
 }
 
+// botCommands is the canonical command list shown in Telegram's menu.
+// Descriptions are intentionally short — the menu trims them anyway.
+var botCommands = []models.BotCommand{
+	{Command: "study", Description: "Word training (quiz)"},
+	{Command: "me", Description: "Your progress"},
+	{Command: "mywords", Description: "Your vocabulary"},
+	{Command: "history", Description: "Article history"},
+	{Command: "settings", Description: "Settings"},
+	{Command: "setkey", Description: "Set Groq API key"},
+	{Command: "delete_me", Description: "Delete my data"},
+}
+
+var botCommandsRU = []models.BotCommand{
+	{Command: "study", Description: "Тренировка слов (квиз)"},
+	{Command: "me", Description: "Прогресс"},
+	{Command: "mywords", Description: "Мой словарь"},
+	{Command: "history", Description: "История статей"},
+	{Command: "settings", Description: "Настройки"},
+	{Command: "setkey", Description: "Задать Groq API-ключ"},
+	{Command: "delete_me", Description: "Удалить мои данные"},
+}
+
+var botCommandsES = []models.BotCommand{
+	{Command: "study", Description: "Entrenamiento de palabras (quiz)"},
+	{Command: "me", Description: "Progreso"},
+	{Command: "mywords", Description: "Tu vocabulario"},
+	{Command: "history", Description: "Historial de artículos"},
+	{Command: "settings", Description: "Ajustes"},
+	{Command: "setkey", Description: "Clave Groq API"},
+	{Command: "delete_me", Description: "Eliminar mis datos"},
+}
+
+// RegisterCommands publishes the bot's command menu to Telegram. Called
+// once at startup. Failures are logged but non-fatal — the bot still
+// runs without a populated menu, just without the slash-command picker.
+func (tb *Bot) RegisterCommands(ctx context.Context) {
+	for code, cmds := range map[string][]models.BotCommand{
+		"":   botCommands,
+		"ru": botCommandsRU,
+		"es": botCommandsES,
+	} {
+		params := &bot.SetMyCommandsParams{Commands: cmds}
+		if code != "" {
+			params.LanguageCode = code
+		}
+		if _, err := tb.b.SetMyCommands(ctx, params); err != nil {
+			tb.log.Warn("set commands", "lang", code, "err", err)
+		}
+	}
+}
+
 // Shutdown waits for in-flight handlers to finish, capped at `timeout`.
 // Returns true if everything drained cleanly, false if the timeout fired
 // (callers may still exit — handlers will continue best-effort, but the

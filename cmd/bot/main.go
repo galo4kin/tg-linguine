@@ -141,6 +141,7 @@ func main() {
 
 	pingVersion, pingCommit := telegram.BuildInfo(version)
 	tgBot.SendStartupPing(ctx, cfg.AdminUserID, pingVersion, pingCommit, time.Now())
+	tgBot.RegisterCommands(ctx)
 
 	tgBot.Start(ctx)
 	// Once Start returns, ctx is canceled and the long-poll loop is gone.
