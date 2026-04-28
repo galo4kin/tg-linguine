@@ -17,7 +17,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
-const wordsPageSize = 5
+const wordsPageSize = 3
 
 // CallbackPrefixWords drives pagination of the words list opened from the
 // article card.
