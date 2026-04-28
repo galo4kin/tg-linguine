@@ -32,12 +32,6 @@ import (
 //	set:noop                 — non-interactive button (used for the "active" badge)
 const CallbackPrefixSettings = "set:"
 
-var (
-	settingsInterfaceLanguages = []string{"ru", "en", "es"}
-	settingsLearnableLanguages = []string{"en", "es", "ru"}
-	settingsCEFRLevels         = []string{"A1", "A2", "B1", "B2", "C1", "C2"}
-)
-
 // Settings serves /settings and the `set:` callback family. It owns the
 // inline menu and routes each leaf action to the relevant repository or to
 // the existing API-key waiter for the `/setkey` reuse case.
@@ -123,7 +117,7 @@ func (h *Settings) HandleCallback(ctx context.Context, b *bot.Bot, update *model
 		// Two more colons: <lang>:<LEVEL>
 		rest := strings.TrimPrefix(payload, "cefr_for:")
 		parts := strings.SplitN(rest, ":", 2)
-		if len(parts) != 2 || !validLearnableLanguage(parts[0]) || !validCEFR(parts[1]) {
+		if len(parts) != 2 || !users.IsSupportedLearningLanguage(parts[0]) || !users.IsCEFR(parts[1]) {
 			h.log.Warn("settings cb: bad cefr_for", "data", cq.Data)
 			return
 		}
@@ -151,7 +145,7 @@ func (h *Settings) editTo(ctx context.Context, b *bot.Bot, chatID any, msgID int
 }
 
 func (h *Settings) applyInterface(ctx context.Context, b *bot.Bot, chatID any, msgID int, u *users.User, lang string) {
-	if !validInterfaceLanguage(lang) {
+	if !users.IsSupportedInterfaceLanguage(lang) {
 		return
 	}
 	if err := h.users.SetInterfaceLanguage(ctx, u.ID, lang); err != nil {
@@ -181,7 +175,7 @@ func (h *Settings) openLanguageMenu(ctx context.Context, b *bot.Bot, chatID any,
 }
 
 func (h *Settings) applyLearningLanguage(ctx context.Context, b *bot.Bot, chatID any, msgID int, u *users.User, lang string) {
-	if !validLearnableLanguage(lang) {
+	if !users.IsSupportedLearningLanguage(lang) {
 		return
 	}
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
@@ -224,7 +218,7 @@ func (h *Settings) openCEFRMenu(ctx context.Context, b *bot.Bot, chatID any, msg
 }
 
 func (h *Settings) applyActiveCEFR(ctx context.Context, b *bot.Bot, chatID any, msgID int, u *users.User, level string) {
-	if !validCEFR(level) {
+	if !users.IsCEFR(level) {
 		return
 	}
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
@@ -279,8 +273,8 @@ func settingsTopKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 }
 
 func settingsIfaceKeyboard(loc *goi18n.Localizer, current string) *models.InlineKeyboardMarkup {
-	row := make([]models.InlineKeyboardButton, 0, len(settingsInterfaceLanguages))
-	for _, code := range settingsInterfaceLanguages {
+	row := make([]models.InlineKeyboardButton, 0, len(users.SupportedInterfaceLanguages))
+	for _, code := range users.SupportedInterfaceLanguages {
 		label := strings.ToUpper(code)
 		if code == current {
 			label = "✓ " + label
@@ -303,8 +297,8 @@ func settingsLanguageKeyboard(loc *goi18n.Localizer, existing []users.UserLangua
 			activeByCode[ul.LanguageCode] = true
 		}
 	}
-	row := make([]models.InlineKeyboardButton, 0, len(settingsLearnableLanguages))
-	for _, code := range settingsLearnableLanguages {
+	row := make([]models.InlineKeyboardButton, 0, len(users.SupportedLearningLanguages))
+	for _, code := range users.SupportedLearningLanguages {
 		label := strings.ToUpper(code)
 		if activeByCode[code] {
 			label = "✓ " + label
@@ -321,8 +315,8 @@ func settingsLanguageKeyboard(loc *goi18n.Localizer, existing []users.UserLangua
 }
 
 func settingsCEFRKeyboard(loc *goi18n.Localizer, current string) *models.InlineKeyboardMarkup {
-	row := make([]models.InlineKeyboardButton, 0, len(settingsCEFRLevels))
-	for _, lvl := range settingsCEFRLevels {
+	row := make([]models.InlineKeyboardButton, 0, len(users.CEFRLevels))
+	for _, lvl := range users.CEFRLevels {
 		label := lvl
 		if lvl == current {
 			label = "✓ " + label
@@ -339,8 +333,8 @@ func settingsCEFRKeyboard(loc *goi18n.Localizer, current string) *models.InlineK
 }
 
 func settingsCEFRForNewKeyboard(loc *goi18n.Localizer, lang string) *models.InlineKeyboardMarkup {
-	row := make([]models.InlineKeyboardButton, 0, len(settingsCEFRLevels))
-	for _, lvl := range settingsCEFRLevels {
+	row := make([]models.InlineKeyboardButton, 0, len(users.CEFRLevels))
+	for _, lvl := range users.CEFRLevels {
 		row = append(row, models.InlineKeyboardButton{
 			Text:         lvl,
 			CallbackData: fmt.Sprintf("%scefr_for:%s:%s", CallbackPrefixSettings, lang, lvl),
@@ -365,29 +359,3 @@ func backToMenuButton(loc *goi18n.Localizer) models.InlineKeyboardButton {
 	}
 }
 
-func validInterfaceLanguage(code string) bool {
-	for _, l := range settingsInterfaceLanguages {
-		if l == code {
-			return true
-		}
-	}
-	return false
-}
-
-func validLearnableLanguage(code string) bool {
-	for _, l := range settingsLearnableLanguages {
-		if l == code {
-			return true
-		}
-	}
-	return false
-}
-
-func validCEFR(code string) bool {
-	for _, l := range settingsCEFRLevels {
-		if l == code {
-			return true
-		}
-	}
-	return false
-}

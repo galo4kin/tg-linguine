@@ -5,13 +5,14 @@ import (
 	"errors"
 )
 
-var supportedLanguages = map[string]bool{"ru": true, "en": true, "es": true}
-
+// NormalizeLanguage maps a Telegram-provided UI language hint onto one of
+// SupportedInterfaceLanguages, falling back to "en" when the locale is not
+// served by the bot.
 func NormalizeLanguage(code string) string {
 	if len(code) >= 2 {
 		code = code[:2]
 	}
-	if supportedLanguages[code] {
+	if IsSupportedInterfaceLanguage(code) {
 		return code
 	}
 	return "en"

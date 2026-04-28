@@ -18,11 +18,6 @@ const (
 	CallbackPrefixOnbLevel = "onb:level:"
 )
 
-var (
-	onboardingLanguages = []string{"ru", "en", "es"}
-	onboardingLevels    = []string{"a1", "a2", "b1", "b2", "c1", "c2"}
-)
-
 type Onboarding struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
@@ -73,7 +68,7 @@ func (h *Onboarding) HandleLanguage(ctx context.Context, b *bot.Bot, update *mod
 		return
 	}
 	lang := strings.TrimPrefix(cq.Data, CallbackPrefixOnbLang)
-	if !validLanguage(lang) {
+	if !users.IsSupportedInterfaceLanguage(lang) {
 		h.answer(ctx, b, cq.ID)
 		return
 	}
@@ -104,7 +99,7 @@ func (h *Onboarding) HandleLevel(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 	level := strings.TrimPrefix(cq.Data, CallbackPrefixOnbLevel)
-	if !validLevel(level) {
+	if !users.IsCEFR(level) {
 		h.answer(ctx, b, cq.ID)
 		return
 	}
@@ -119,7 +114,7 @@ func (h *Onboarding) HandleLevel(ctx context.Context, b *bot.Bot, update *models
 		return
 	}
 
-	if err := h.languages.Set(ctx, u.ID, snap.Language, strings.ToUpper(level)); err != nil {
+	if err := h.languages.Set(ctx, u.ID, snap.Language, level); err != nil {
 		h.log.Error("onb level: persist", "err", err)
 		h.answer(ctx, b, cq.ID)
 		return
@@ -130,7 +125,7 @@ func (h *Onboarding) HandleLevel(ctx context.Context, b *bot.Bot, update *models
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
 	doneText := tgi18n.T(loc, "onb.done", map[string]string{
 		"Language": strings.ToUpper(snap.Language),
-		"Level":    strings.ToUpper(level),
+		"Level":    level,
 	})
 	chatID, msgID, ok := callbackMessageRef(cq)
 	if ok {
@@ -156,8 +151,8 @@ func callbackMessageRef(cq *models.CallbackQuery) (int64, int, bool) {
 }
 
 func languageKeyboard() *models.InlineKeyboardMarkup {
-	row := make([]models.InlineKeyboardButton, 0, len(onboardingLanguages))
-	for _, code := range onboardingLanguages {
+	row := make([]models.InlineKeyboardButton, 0, len(users.SupportedInterfaceLanguages))
+	for _, code := range users.SupportedInterfaceLanguages {
 		row = append(row, models.InlineKeyboardButton{
 			Text:         strings.ToUpper(code),
 			CallbackData: CallbackPrefixOnbLang + code,
@@ -167,30 +162,12 @@ func languageKeyboard() *models.InlineKeyboardMarkup {
 }
 
 func levelKeyboard() *models.InlineKeyboardMarkup {
-	row := make([]models.InlineKeyboardButton, 0, len(onboardingLevels))
-	for _, code := range onboardingLevels {
+	row := make([]models.InlineKeyboardButton, 0, len(users.CEFRLevels))
+	for _, code := range users.CEFRLevels {
 		row = append(row, models.InlineKeyboardButton{
-			Text:         strings.ToUpper(code),
+			Text:         code,
 			CallbackData: CallbackPrefixOnbLevel + code,
 		})
 	}
 	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{row}}
-}
-
-func validLanguage(code string) bool {
-	for _, l := range onboardingLanguages {
-		if l == code {
-			return true
-		}
-	}
-	return false
-}
-
-func validLevel(code string) bool {
-	for _, l := range onboardingLevels {
-		if l == code {
-			return true
-		}
-	}
-	return false
 }

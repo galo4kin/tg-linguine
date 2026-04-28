@@ -1,5 +1,14 @@
 # Releases
 
+## 20.6 — refactor-cefr-and-lang-validators
+Списки поддерживаемых языков и уровней CEFR + соответствующие
+валидаторы переехали в новый `internal/users/codes.go`
+(`SupportedInterfaceLanguages`, `SupportedLearningLanguages`,
+`CEFRLevels`, `IsSupportedInterfaceLanguage`, `IsSupportedLearningLanguage`,
+`IsCEFR`, `CEFRShift`); дубли в `articles`, `onboarding.go` и
+`settings.go` удалены, onboarding-callback'и теперь используют
+верхний регистр (`onb:level:A1..C2`).
+
 ## 20.5 — refactor-open-article-helper
 Три копии «открыть карточку статьи»-флоу (`hist:open`, `art:`-callback
 и cache-hit ветка url-handler-а) сведены в общий `cardRenderer` в

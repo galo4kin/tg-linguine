@@ -252,7 +252,7 @@ func progress(p ProgressFunc, s Stage) {
 // generated text (or the cached one if the level was already present, which
 // makes this idempotent).
 func (s *Service) Adapt(ctx context.Context, userID, articleID int64, targetLevel string) (string, error) {
-	if !IsCEFR(targetLevel) {
+	if !users.IsCEFR(targetLevel) {
 		return "", ErrUnknownCEFR
 	}
 
@@ -322,13 +322,13 @@ func (s *Service) Adapt(ctx context.Context, userID, articleID int64, targetLeve
 // those slots as missing rather than empty-strings.
 func adaptedFromLLM(userLevel string, v llm.AdaptedVersions) AdaptedVersions {
 	out := AdaptedVersions{}
-	if lvl, ok := CEFRShift(userLevel, -1); ok && v.Lower != "" {
+	if lvl, ok := users.CEFRShift(userLevel, -1); ok && v.Lower != "" {
 		out[lvl] = v.Lower
 	}
-	if IsCEFR(userLevel) && v.Current != "" {
+	if users.IsCEFR(userLevel) && v.Current != "" {
 		out[userLevel] = v.Current
 	}
-	if lvl, ok := CEFRShift(userLevel, +1); ok && v.Higher != "" {
+	if lvl, ok := users.CEFRShift(userLevel, +1); ok && v.Higher != "" {
 		out[lvl] = v.Higher
 	}
 	return out
@@ -378,7 +378,7 @@ func pickAdaptSource(current AdaptedVersions, target, articleCEFR string) (text,
 }
 
 func indexOfCEFR(s string) int {
-	for i, l := range CEFRLevels {
+	for i, l := range users.CEFRLevels {
 		if l == s {
 			return i
 		}

@@ -3,6 +3,8 @@ package articles
 import (
 	"encoding/json"
 	"time"
+
+	"github.com/nikita/tg-linguine/internal/users"
 )
 
 // Article is a stored, analyzed article belonging to a user.
@@ -41,41 +43,10 @@ func (a *Article) ParseAdaptedVersions() AdaptedVersions {
 	}
 	out := AdaptedVersions{}
 	for k, v := range raw {
-		if !IsCEFR(k) || v == "" {
+		if !users.IsCEFR(k) || v == "" {
 			continue
 		}
 		out[k] = v
 	}
 	return out
-}
-
-// CEFRLevels is the canonical ordering used to translate relative
-// {lower, current, higher} levels into absolute CEFR codes and back.
-var CEFRLevels = []string{"A1", "A2", "B1", "B2", "C1", "C2"}
-
-// IsCEFR reports whether s is a known CEFR code.
-func IsCEFR(s string) bool {
-	for _, l := range CEFRLevels {
-		if l == s {
-			return true
-		}
-	}
-	return false
-}
-
-// CEFRShift returns the level `delta` steps above (positive) or below
-// (negative) `base`. ok is false when `base` is unknown or the shift falls
-// off the A1..C2 range.
-func CEFRShift(base string, delta int) (string, bool) {
-	for i, l := range CEFRLevels {
-		if l != base {
-			continue
-		}
-		j := i + delta
-		if j < 0 || j >= len(CEFRLevels) {
-			return "", false
-		}
-		return CEFRLevels[j], true
-	}
-	return "", false
 }

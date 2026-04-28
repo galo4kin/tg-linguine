@@ -9,6 +9,7 @@ import (
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	"github.com/nikita/tg-linguine/internal/articles"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
+	"github.com/nikita/tg-linguine/internal/users"
 )
 
 const articleCardPreviewLimit = 5
@@ -69,11 +70,11 @@ func parseCardLevel(s string) CardLevel {
 func resolveAbsoluteLevel(userCEFR string, view CardLevel) (string, bool) {
 	switch view {
 	case CardLevelLower:
-		return articles.CEFRShift(userCEFR, -1)
+		return users.CEFRShift(userCEFR, -1)
 	case CardLevelHigher:
-		return articles.CEFRShift(userCEFR, +1)
+		return users.CEFRShift(userCEFR, +1)
 	default:
-		if articles.IsCEFR(userCEFR) {
+		if users.IsCEFR(userCEFR) {
 			return userCEFR, true
 		}
 		return "", false
@@ -151,7 +152,7 @@ func articleCardKeyboard(loc *goi18n.Localizer, article *articles.Article, userC
 	}
 	rows := make([][]models.InlineKeyboardButton, 0, 3)
 
-	if articles.IsCEFR(userCEFR) {
+	if users.IsCEFR(userCEFR) {
 		rows = append(rows, levelRow(loc, article.ID, view, userCEFR))
 	}
 
