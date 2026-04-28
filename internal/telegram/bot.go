@@ -61,6 +61,11 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 		// loop; then i18n/log/touch so handlers run with localizer in context
 		// and the user's last_seen_at gets bumped before dispatch.
 		bot.WithMiddlewares(tb.trackInflightMiddleware, tb.recoverMiddleware, tb.i18nMiddleware, tb.logMiddleware, tb.touchLastSeenMiddleware),
+		// Native quiz polls deliver answers via Update.PollAnswer; that
+		// type is excluded from Telegram's getUpdates default unless we
+		// opt in here. Keep the rest of the standard set explicit so we
+		// don't silently drop something.
+		bot.WithAllowedUpdates(bot.AllowedUpdates{"message", "edited_message", "callback_query", "poll_answer"}),
 	}
 
 	b, err := bot.New(cfg.BotToken, opts...)
@@ -82,7 +87,8 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	myWordsH := handlers.NewMyWords(deps.Users, deps.Languages, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	quizFSM := session.NewQuiz(studySessionTTL)
-	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, quizFSM, deps.DB, deps.Bundle, log)
+	quizPolls := session.NewQuizPolls(studySessionTTL)
+	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, quizFSM, quizPolls, deps.DB, deps.Bundle, log)
 	deleteH := handlers.NewDelete(deps.Users, onbFSM, quizFSM, keyWaiter, deps.Bundle, log)
 	settingsH := handlers.NewSettings(deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
 	adminGate := func(uid int64) bool { return IsAdmin(cfg, uid) }
@@ -113,6 +119,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixSettings, bot.MatchTypePrefix, settingsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixMyWords, bot.MatchTypePrefix, myWordsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixStudy, bot.MatchTypePrefix, studyH.HandleCallback)
+	b.RegisterHandlerMatchFunc(handlers.MatchPollAnswer, studyH.HandlePollAnswer)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixDelete, bot.MatchTypePrefix, deleteH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixLongArticle, bot.MatchTypePrefix, longH.HandleCallback)
 

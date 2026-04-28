@@ -1,5 +1,8 @@
 # Releases
 
+## 51 — quiz-native-poll
+Добавлен второй UI-формат квиза — нативный Telegram quiz poll: новый реестр `session.QuizPolls` (pollID → entry с TTL), хендлер `Study.HandlePollAnswer` и `bot.WithAllowedUpdates(... "poll_answer" ...)` в bot.go. Сборка деки временно форсирует `UIMode=poll` для всех вопросов раунда (снимется на шаге 52), фидбэк после ответа приходит отдельным сообщением с кнопкой «Дальше».
+
 ## 42.9 — refactor-groq-schema-retry-helper
 Общий цикл «провалидировать → при ошибке retry с assistant+user-сообщением → провалидировать ещё раз» вынесен в `Client.chatJSONWithSchemaRetry` (`internal/llm/groq/schema_retry.go`). `Analyze` и `Adapt` теперь сворачиваются до подготовки messages и вызова helper'а; diagnostic-лог `<label> schema-retry` (snippet/len/reason) автоматически работает и для Adapt.
 
