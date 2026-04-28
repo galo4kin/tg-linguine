@@ -1,0 +1,32 @@
+{
+  "summary_target": "A short clean summary of the article in the target language.",
+  "summary_native": "Краткое нейтральное резюме статьи на родном языке.",
+  "category": "Tech",
+  "cefr_detected": "B1",
+  "adapted_versions": {
+    "lower": "An easier rewrite of the article body.",
+    "current": "The article body kept at the user's current CEFR level.",
+    "higher": "A harder rewrite of the article body."
+  },
+  "words": [
+    {
+      "surface_form": "ipsum",
+      "lemma": "ipsum",
+      "pos": "noun",
+      "transcription_ipa": "/ˈɪpsəm/",
+      "translation_native": "сам",
+      "example_target": "Lorem ipsum dolor sit amet.",
+      "example_native": "Текст-наполнитель: ipsum dolor sit amet."
+    },
+    {
+      "surface_form": "lorem",
+      "lemma": "lorem",
+      "pos": "noun",
+      "transcription_ipa": "/ˈlɔːrəm/",
+      "translation_native": "тест",
+      "example_target": "Lorem ipsum.",
+      "example_native": "Тест-фикстура."
+    }
+  ],
+  "safety_flags": []
+}

@@ -1,5 +1,17 @@
 # Releases
 
+## 28 — tests
+Доменные пакеты подтянуты к ≥70% покрытия: добавлены unit-тесты на
+`users.codes` (`IsCEFR`, `CEFRShift`, `IsSupportedLearningLanguage`),
+sqlite-репо `user_languages` (полный жизненный цикл Set/Activate/
+SetCEFR/Active/List) и `users.Repository`
+(Create/ByTelegramID/UpdateInterfaceLanguage). Появился пакет
+`internal/llm/mock` с JSON-фикстурами `analyze_clean` /
+`analyze_flagged` / `adapt_clean` (фикстуры валидируются через
+реальную JSON-схему, чтобы не разъезжались с прод-контрактом). Тест
+`internal/i18n` сравнивает наборы ключей `en`/`ru`/`es` —
+расхождения считаются ошибкой. `make test` зелёный, полный прогон ~4с.
+
 ## 27 — content-safety
 Появилась статическая защита от adult/illegal-источников: файл
 `configs/blocked_domains.txt` встраивается через `embed`, парсится
