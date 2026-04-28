@@ -1,5 +1,16 @@
 # Releases
 
+## 24 — delete-me
+Появилась команда `/delete_me` и callback-семейство `del:*` —
+GDPR-удаление с обязательным подтверждением. На «Да, удалить» одна
+транзакция вычищает строки пользователя из `users`, `user_languages`,
+`user_api_keys`, `articles` (с каскадом на `article_words`) и
+`user_word_status`; `dictionary_words` остаются нетронутыми, FSM
+(онбординг, ожидание API-ключа, текущая study-сессия) сбрасываются.
+Кнопка «🗑 Удалить мои данные» в `/settings` теперь ведёт в тот же
+flow вместо плейсхолдера. Покрыто sqlite-тестом, проверяющим, что
+второй пользователь и shared-словарь после удаления остаются на месте.
+
 ## 23 — categories
 LLM-категория статьи теперь нормализуется до одного из 9 канонических
 кодов (Travel/Tech/Politics/Sports/Health/Culture/Business/Science/

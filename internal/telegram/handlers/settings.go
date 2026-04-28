@@ -28,7 +28,7 @@ import (
 //	set:cefr:<LEVEL>         — apply CEFR to the user's active language
 //	set:cefr_for:<lang>:<L>  — apply CEFR to a freshly added language
 //	set:apikey               — kick off the /setkey flow inline
-//	set:delete               — placeholder until step 24
+//	set:delete               — open the /delete_me confirmation inline
 //	set:noop                 — non-interactive button (used for the "active" badge)
 const CallbackPrefixSettings = "set:"
 
@@ -39,6 +39,7 @@ type Settings struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
 	keyWaiter *session.APIKeyWaiter
+	deleteH   *Delete
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
 }
@@ -47,6 +48,7 @@ func NewSettings(
 	svc *users.Service,
 	langs users.UserLanguageRepository,
 	keyWaiter *session.APIKeyWaiter,
+	deleteH *Delete,
 	bundle *goi18n.Bundle,
 	log *slog.Logger,
 ) *Settings {
@@ -54,6 +56,7 @@ func NewSettings(
 		users:     svc,
 		languages: langs,
 		keyWaiter: keyWaiter,
+		deleteH:   deleteH,
 		bundle:    bundle,
 		log:       log,
 	}
@@ -127,7 +130,11 @@ func (h *Settings) HandleCallback(ctx context.Context, b *bot.Bot, update *model
 	case payload == "apikey":
 		h.startAPIKeyFlow(ctx, b, chatID, msgID, u)
 	case payload == "delete":
-		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "settings.delete.placeholder", nil), settingsBackKeyboard(loc))
+		if h.deleteH == nil {
+			h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "error.generic", nil), settingsBackKeyboard(loc))
+			return
+		}
+		h.deleteH.PromptInline(ctx, b, chatID, msgID, u.InterfaceLanguage)
 	default:
 		h.log.Warn("settings cb: unknown payload", "data", cq.Data)
 	}

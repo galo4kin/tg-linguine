@@ -37,6 +37,12 @@ func (s *Service) SetInterfaceLanguage(ctx context.Context, id int64, lang strin
 	return s.repo.UpdateInterfaceLanguage(ctx, id, NormalizeLanguage(lang))
 }
 
+// DeleteUser wipes the user and all data scoped to them. See
+// Repository.Delete for the exact set of tables touched.
+func (s *Service) DeleteUser(ctx context.Context, id int64) error {
+	return s.repo.Delete(ctx, id)
+}
+
 func (s *Service) RegisterUser(ctx context.Context, tg TelegramUser) (*User, bool, error) {
 	existing, err := s.repo.ByTelegramID(ctx, tg.ID)
 	if err == nil {

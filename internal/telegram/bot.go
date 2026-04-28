@@ -66,10 +66,11 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	historyH := handlers.NewHistory(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
-	settingsH := handlers.NewSettings(deps.Users, deps.Languages, keyWaiter, deps.Bundle, log)
 	myWordsH := handlers.NewMyWords(deps.Users, deps.Languages, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	studyFSM := session.NewStudy(studySessionTTL)
 	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, studyFSM, deps.DB, deps.Bundle, log)
+	deleteH := handlers.NewDelete(deps.Users, onbFSM, studyFSM, keyWaiter, deps.Bundle, log)
+	settingsH := handlers.NewSettings(deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
 		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
@@ -78,6 +79,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/settings", bot.MatchTypeExact, settingsH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/mywords", bot.MatchTypeExact, myWordsH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/study", bot.MatchTypeExact, studyH.HandleCommand)
+	b.RegisterHandler(bot.HandlerTypeMessageText, "/delete_me", bot.MatchTypeExact, deleteH.HandleCommand)
 	b.RegisterHandlerMatchFunc(matchURLText(keyWaiter), urlH.Handle)
 	b.RegisterHandlerMatchFunc(matchAPIKeyText(keyWaiter), apiKey.HandleIncomingText)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixOnbLang, bot.MatchTypePrefix, onb.HandleLanguage)
@@ -89,6 +91,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixSettings, bot.MatchTypePrefix, settingsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixMyWords, bot.MatchTypePrefix, myWordsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixStudy, bot.MatchTypePrefix, studyH.HandleCallback)
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixDelete, bot.MatchTypePrefix, deleteH.HandleCallback)
 
 	tb.b = b
 	return tb, nil

@@ -108,6 +108,37 @@ func (r *sqliteRepo) UpdateInterfaceLanguage(ctx context.Context, id int64, lang
 	return nil
 }
 
+func (r *sqliteRepo) Delete(ctx context.Context, id int64) error {
+	tx, err := r.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("users: Delete begin: %w", err)
+	}
+	defer tx.Rollback()
+
+	// Explicit deletes in FK-safe order. `article_words` cascades from
+	// `articles.id`, so deleting `articles` is enough for that table.
+	// `dictionary_words` is the shared lemma table — never touched here.
+	stmts := [...]struct {
+		name string
+		sql  string
+	}{
+		{"user_word_status", `DELETE FROM user_word_status WHERE user_id = ?`},
+		{"articles", `DELETE FROM articles WHERE user_id = ?`},
+		{"user_api_keys", `DELETE FROM user_api_keys WHERE user_id = ?`},
+		{"user_languages", `DELETE FROM user_languages WHERE user_id = ?`},
+		{"users", `DELETE FROM users WHERE id = ?`},
+	}
+	for _, s := range stmts {
+		if _, err := tx.ExecContext(ctx, s.sql, id); err != nil {
+			return fmt.Errorf("users: Delete %s: %w", s.name, err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("users: Delete commit: %w", err)
+	}
+	return nil
+}
+
 func nullString(s string) any {
 	if s == "" {
 		return nil

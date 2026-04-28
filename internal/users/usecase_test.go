@@ -49,6 +49,16 @@ func (m *memRepo) UpdateInterfaceLanguage(ctx context.Context, id int64, lang st
 	return ErrNotFound
 }
 
+func (m *memRepo) Delete(ctx context.Context, id int64) error {
+	for tgID, u := range m.byID {
+		if u.ID == id {
+			delete(m.byID, tgID)
+			return nil
+		}
+	}
+	return ErrNotFound
+}
+
 func TestRegisterUser_CreatesNewUser(t *testing.T) {
 	repo := newMemRepo()
 	svc := NewService(repo)
