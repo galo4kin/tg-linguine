@@ -8,17 +8,29 @@ import (
 	"github.com/go-telegram/bot/models"
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
+	"github.com/nikita/tg-linguine/internal/screen"
 )
 
 const CallbackPrefixWelcome = "welcome:"
 
-func SendWelcome(ctx context.Context, b *bot.Bot, chatID int64) {
+// Welcome renders the main menu screen via the screen Manager.
+type Welcome struct {
+	mgr *screen.Manager
+}
+
+func NewWelcome(mgr *screen.Manager) *Welcome { return &Welcome{mgr: mgr} }
+
+// Show renders the welcome screen for the given chat, using the localizer
+// already in ctx.
+func (w *Welcome) Show(ctx context.Context, b *bot.Bot, chatID int64) {
 	loc := tgi18n.FromContext(ctx)
 	text := tgi18n.T(loc, "welcome.text", nil)
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: welcomeKeyboard(loc),
+	body := welcomeKeyboard(loc)
+	kb := screen.WithNavigationFor(loc, body, screen.ScreenWelcome, "", nil)
+	_ = w.mgr.Show(ctx, b, chatID, screen.Screen{
+		ID:       screen.ScreenWelcome,
+		Text:     text,
+		Keyboard: kb,
 	})
 }
 

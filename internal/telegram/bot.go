@@ -90,8 +90,10 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	screenMgr := screen.NewManager(activeScreenRepo, log)
 	nav := handlers.NewNav(screenMgr, log)
 
+	welcomeH := handlers.NewWelcome(screenMgr)
+
 	onbFSM := session.NewOnboarding(onboardingTTL)
-	onb := handlers.NewOnboarding(deps.Users, deps.Languages, onbFSM, deps.Bundle, log)
+	onb := handlers.NewOnboarding(deps.Users, deps.Languages, onbFSM, welcomeH, deps.Bundle, log)
 
 	keyWaiter := session.NewAPIKeyWaiter(apiKeyPromptTTL)
 	apiKey := handlers.NewAPIKey(deps.Users, deps.APIKeys, deps.LLMProvider, keyWaiter, deps.Bundle, log)
@@ -117,7 +119,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	adminH := handlers.NewAdmin(adminGate, deps.Users, deps.ArticleRepo, deps.Dictionary, deps.DB, log)
 
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/start", bot.MatchTypeExact,
-		handlers.Start(deps.Users, deps.Languages, onb, deps.Bundle, log))
+		handlers.Start(deps.Users, deps.Languages, onb, welcomeH, screenMgr, deps.Bundle, log))
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/setkey", bot.MatchTypeExact, apiKey.HandleSetKeyCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/history", bot.MatchTypeExact, historyH.HandleCommand)
 	b.RegisterHandler(bot.HandlerTypeMessageText, "/settings", bot.MatchTypeExact, settingsH.HandleCommand)
@@ -147,6 +149,10 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWelcome, bot.MatchTypePrefix,
 		handlers.HandleWelcomeCallback(myWordsH, studyH, historyH, settingsH))
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, screen.CallbackPrefixNav, bot.MatchTypePrefix, nav.HandleCallback)
+
+	nav.Register(screen.ScreenWelcome, func(ctx context.Context, b *bot.Bot, chatID int64, _ map[string]string) {
+		welcomeH.Show(ctx, b, chatID)
+	})
 
 	fallback := handlers.NewFallback(screenMgr, nav, keyWaiter, log)
 	b.RegisterHandlerMatchFunc(fallback.Match, fallback.Handle)

@@ -8,11 +8,12 @@ import (
 	"github.com/go-telegram/bot"
 	"github.com/go-telegram/bot/models"
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
+	"github.com/nikita/tg-linguine/internal/screen"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
-func Start(svc *users.Service, langs users.UserLanguageRepository, onb *Onboarding, bundle *goi18n.Bundle, log *slog.Logger) bot.HandlerFunc {
+func Start(svc *users.Service, langs users.UserLanguageRepository, onb *Onboarding, welcomeH *Welcome, screenMgr *screen.Manager, bundle *goi18n.Bundle, log *slog.Logger) bot.HandlerFunc {
 	return func(ctx context.Context, b *bot.Bot, update *models.Update) {
 		if update.Message == nil || update.Message.From == nil {
 			return
@@ -44,11 +45,9 @@ func Start(svc *users.Service, langs users.UserLanguageRepository, onb *Onboardi
 			return
 		}
 		if active != nil {
-			loc := tgi18n.For(bundle, u.InterfaceLanguage)
-			b.SendMessage(ctx, &bot.SendMessageParams{
-				ChatID: update.Message.Chat.ID,
-				Text:   tgi18n.T(loc, "start.greeting", nil),
-			})
+			chatID := update.Message.Chat.ID
+			_ = screenMgr.RetireActive(ctx, b, chatID)
+			welcomeH.Show(ctx, b, chatID)
 			return
 		}
 

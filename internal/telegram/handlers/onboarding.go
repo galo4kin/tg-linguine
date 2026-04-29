@@ -22,12 +22,13 @@ type Onboarding struct {
 	users     *users.Service
 	languages users.UserLanguageRepository
 	fsm       *session.Onboarding
+	welcomeH  *Welcome
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
 }
 
-func NewOnboarding(svc *users.Service, langs users.UserLanguageRepository, fsm *session.Onboarding, bundle *goi18n.Bundle, log *slog.Logger) *Onboarding {
-	return &Onboarding{users: svc, languages: langs, fsm: fsm, bundle: bundle, log: log}
+func NewOnboarding(svc *users.Service, langs users.UserLanguageRepository, fsm *session.Onboarding, welcomeH *Welcome, bundle *goi18n.Bundle, log *slog.Logger) *Onboarding {
+	return &Onboarding{users: svc, languages: langs, fsm: fsm, welcomeH: welcomeH, bundle: bundle, log: log}
 }
 
 // Begin sends the language-selection keyboard for a fresh onboarding session.
@@ -136,7 +137,7 @@ func (h *Onboarding) HandleLevel(ctx context.Context, b *bot.Bot, update *models
 		})
 	}
 	h.log.Info("onboarding complete", "user_id", u.ID, "language", snap.Language, "level", level)
-	SendWelcome(ctx, b, chatID)
+	h.welcomeH.Show(ctx, b, chatID)
 	h.answer(ctx, b, cq.ID)
 }
 

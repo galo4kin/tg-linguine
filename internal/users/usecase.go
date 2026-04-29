@@ -30,6 +30,10 @@ func (s *Service) ByID(ctx context.Context, id int64) (*User, error) {
 	return s.repo.ByID(ctx, id)
 }
 
+func (s *Service) ByTelegramID(ctx context.Context, tgID int64) (*User, error) {
+	return s.repo.ByTelegramID(ctx, tgID)
+}
+
 // SetInterfaceLanguage updates the user's UI language. The code is normalized
 // against the supported set; unknown values fall back to "en" (consistent
 // with NormalizeLanguage on registration).
