@@ -597,13 +597,15 @@ func (s *Service) runAnalysis(ctx context.Context, userID int64, user *users.Use
 
 // extractVocabChunks splits the full article text into up to 2 chunks and
 // calls ExtractVocab on each to find words the main Analyze call missed.
+// Returns an error only when every chunk fails.
 func (s *Service) extractVocabChunks(ctx context.Context, key, lang, nativeLang, cefr, fullText string, knownLemmas []string, alreadyFound []llm.AnalyzedWord) ([]llm.AnalyzedWord, error) {
 	chunks := chunkText(fullText, s.maxTokens)
 	if len(chunks) == 0 {
 		return nil, nil
 	}
 
-	// Build exclusion set: known lemmas + lemmas from the main Analyze call.
+	// Already-found lemmas from the main Analyze call; passed alongside
+	// knownLemmas so the LLM skips words we already have.
 	exclude := make([]string, 0, len(alreadyFound))
 	for _, w := range alreadyFound {
 		exclude = append(exclude, w.Lemma)
@@ -614,7 +616,11 @@ func (s *Service) extractVocabChunks(ctx context.Context, key, lang, nativeLang,
 		perChunk = 5
 	}
 
-	var all []llm.AnalyzedWord
+	var (
+		all      []llm.AnalyzedWord
+		lastErr  error
+		failures int
+	)
 	for _, chunk := range chunks {
 		resp, err := s.llm.ExtractVocab(ctx, key, llm.ExtractVocabRequest{
 			TargetLanguage:     lang,
@@ -626,6 +632,8 @@ func (s *Service) extractVocabChunks(ctx context.Context, key, lang, nativeLang,
 			VocabTarget:        perChunk,
 		})
 		if err != nil {
+			failures++
+			lastErr = err
 			if s.log != nil {
 				s.log.Warn("vocab chunk extraction failed", "err", err)
 			}
@@ -636,12 +644,15 @@ func (s *Service) extractVocabChunks(ctx context.Context, key, lang, nativeLang,
 			exclude = append(exclude, w.Lemma)
 		}
 	}
+	if failures == len(chunks) {
+		return nil, fmt.Errorf("all %d vocab chunks failed: %w", failures, lastErr)
+	}
 	return all, nil
 }
 
 // mergeWords combines primary and extra word lists, deduplicating by
 // lowercased lemma and capping at the target count.
-func mergeWords(primary, extra []llm.AnalyzedWord, cap int) []llm.AnalyzedWord {
+func mergeWords(primary, extra []llm.AnalyzedWord, limit int) []llm.AnalyzedWord {
 	seen := make(map[string]bool, len(primary))
 	for _, w := range primary {
 		seen[strings.ToLower(w.Lemma)] = true
@@ -651,13 +662,13 @@ func mergeWords(primary, extra []llm.AnalyzedWord, cap int) []llm.AnalyzedWord {
 	copy(merged, primary)
 
 	for _, w := range extra {
-		key := strings.ToLower(w.Lemma)
-		if seen[key] {
+		k := strings.ToLower(w.Lemma)
+		if seen[k] {
 			continue
 		}
-		seen[key] = true
+		seen[k] = true
 		merged = append(merged, w)
-		if cap > 0 && len(merged) >= cap {
+		if limit > 0 && len(merged) >= limit {
 			break
 		}
 	}

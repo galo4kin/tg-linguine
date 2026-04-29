@@ -12,7 +12,7 @@ func chunkText(text string, maxTokens int) []string {
 	}
 
 	var chunks []string
-	remaining := text
+	remaining := strings.TrimSpace(text)
 
 	for i := 0; i < maxVocabChunks && remaining != ""; i++ {
 		chunk, _ := TruncateAtParagraph(remaining, maxTokens)
@@ -22,14 +22,13 @@ func chunkText(text string, maxTokens int) []string {
 		}
 		chunks = append(chunks, chunk)
 
-		// Advance past what we kept. We need to find where chunk ends in
-		// the original remaining text. Because TruncateAtParagraph trims
-		// whitespace, we locate the chunk prefix and skip past it.
-		idx := strings.Index(remaining, chunk)
-		if idx < 0 {
+		// TruncateAtParagraph returns a prefix of remaining (trimmed).
+		// Advance past it using HasPrefix for safety.
+		if strings.HasPrefix(remaining, chunk) {
+			remaining = strings.TrimSpace(remaining[len(chunk):])
+		} else {
 			break
 		}
-		remaining = strings.TrimSpace(remaining[idx+len(chunk):])
 	}
 
 	return chunks
