@@ -24,3 +24,6 @@ vendor/
 .claude/memory-compiler/.venv/
 __pycache__/
 
+# superpowers plugin runtime (generated specs/plans)
+docs/superpowers/
+
