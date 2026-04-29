@@ -14,6 +14,7 @@ import (
 	"github.com/nikita/tg-linguine/internal/articles"
 	"github.com/nikita/tg-linguine/internal/dictionary"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
+	"github.com/nikita/tg-linguine/internal/screen"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -33,6 +34,7 @@ const CallbackPrefixHistory = "hist:"
 // reuses the article-card renderer so the reopened card matches what the user
 // saw right after the original analysis (without re-calling the LLM).
 type History struct {
+	mgr       *screen.Manager
 	users     *users.Service
 	languages users.UserLanguageRepository
 	articles  articles.Repository
@@ -43,6 +45,7 @@ type History struct {
 }
 
 func NewHistory(
+	mgr *screen.Manager,
 	svc *users.Service,
 	languages users.UserLanguageRepository,
 	articleRepo articles.Repository,
@@ -53,6 +56,7 @@ func NewHistory(
 	log *slog.Logger,
 ) *History {
 	return &History{
+		mgr:       mgr,
 		users:     svc,
 		languages: languages,
 		articles:  articleRepo,
@@ -75,7 +79,7 @@ func (h *History) HandleCommand(ctx context.Context, b *bot.Bot, update *models.
 		return
 	}
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
-	h.sendPage(ctx, b, msg.Chat.ID, u.ID, loc, 0)
+	h.showPage(ctx, b, msg.Chat.ID, u.ID, loc, "", 0)
 }
 
 // HandleCallback drives the `hist:` prefix.
@@ -101,7 +105,7 @@ func (h *History) HandleCallback(ctx context.Context, b *bot.Bot, update *models
 	data := strings.TrimPrefix(cq.Data, CallbackPrefixHistory)
 	switch {
 	case data == "close":
-		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+		_ = h.mgr.RetireActive(ctx, b, chatID)
 		return
 	case data == "noop":
 		return
@@ -123,7 +127,7 @@ func (h *History) HandleCallback(ctx context.Context, b *bot.Bot, update *models
 			h.log.Warn("history cb: bad page", "data", cq.Data, "err", err)
 			return
 		}
-		h.editPage(ctx, b, chatID, msgID, u.ID, loc, category, page)
+		h.showPage(ctx, b, chatID, u.ID, loc, category, page)
 	case strings.HasPrefix(data, "open:"):
 		idStr := strings.TrimPrefix(data, "open:")
 		articleID, err := strconv.ParseInt(idStr, 10, 64)
@@ -141,35 +145,39 @@ func (h *History) HandleCallback(ctx context.Context, b *bot.Bot, update *models
 	}
 }
 
-func (h *History) sendPage(ctx context.Context, b *bot.Bot, chatID, userID int64, loc *goi18n.Localizer, page int) {
-	text, markup, ok := h.buildPage(ctx, userID, loc, "", page)
+// showPage builds a page and renders it via mgr.Show. Same screen ID means
+// Manager will edit in place for pagination callbacks.
+func (h *History) showPage(ctx context.Context, b *bot.Bot, chatID, userID int64, loc *goi18n.Localizer, category string, page int) {
+	text, markup, ok := h.buildPage(ctx, userID, loc, category, page)
 	if !ok {
-		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: chatID,
-			Text:   tgi18n.T(loc, "error.generic", nil),
+		_ = h.mgr.Show(ctx, b, chatID, screen.Screen{
+			ID:       screen.ScreenHistory,
+			Text:     tgi18n.T(loc, "error.generic", nil),
+			Keyboard: screen.WithNavigation(loc, nil, "", nil),
 		})
 		return
 	}
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      chatID,
-		Text:        text,
-		ReplyMarkup: markup,
+	kb := screen.WithNavigation(loc, markup, "", nil)
+	_ = h.mgr.Show(ctx, b, chatID, screen.Screen{
+		ID:       screen.ScreenHistory,
+		Text:     text,
+		Keyboard: kb,
+		Context:  map[string]string{"f": encodeCategoryFilter(category), "p": strconv.Itoa(page)},
 	})
 }
 
-func (h *History) editPage(ctx context.Context, b *bot.Bot, chatID any, msgID int, userID int64, loc *goi18n.Localizer, category string, page int) {
-	text, markup, ok := h.buildPage(ctx, userID, loc, category, page)
-	if !ok {
+// RenderForChat is called by the nav renderer to re-render the history screen
+// when the user navigates back to it.
+func (h *History) RenderForChat(ctx context.Context, b *bot.Bot, chatID int64, sctx map[string]string) {
+	u, err := h.users.ByTelegramID(ctx, chatID)
+	if err != nil {
+		h.log.Warn("history render: user lookup", "chat_id", chatID, "err", err)
 		return
 	}
-	if _, err := b.EditMessageText(ctx, &bot.EditMessageTextParams{
-		ChatID:      chatID,
-		MessageID:   msgID,
-		Text:        text,
-		ReplyMarkup: markup,
-	}); err != nil {
-		h.log.Debug("history edit: edit", "err", err)
-	}
+	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
+	cat, _ := decodeCategoryFilter(sctx["f"])
+	page, _ := strconv.Atoi(sctx["p"])
+	h.showPage(ctx, b, chatID, u.ID, loc, cat, page)
 }
 
 func (h *History) buildPage(ctx context.Context, userID int64, loc *goi18n.Localizer, category string, page int) (string, *models.InlineKeyboardMarkup, bool) {
@@ -183,7 +191,7 @@ func (h *History) buildPage(ctx context.Context, userID int64, loc *goi18n.Local
 		// message; under a category filter that just has no matches, keep
 		// the category buttons available so they can switch back to All.
 		if category == "" {
-			return tgi18n.T(loc, "history.empty", nil), historyEmptyKeyboard(loc), true
+			return tgi18n.T(loc, "history.empty", nil), historyEmptyKeyboard(), true
 		}
 		header := tgi18n.T(loc, "history.empty_category", map[string]string{
 			"Category": tgi18n.T(loc, "category."+category, nil),
@@ -237,33 +245,19 @@ func historyKeyboard(loc *goi18n.Localizer, rows []articles.Article, category st
 	} else {
 		next.CallbackData = CallbackPrefixHistory + "noop"
 	}
-	closeBtn := models.InlineKeyboardButton{
-		Text:         tgi18n.T(loc, "history.btn.close", nil),
-		CallbackData: CallbackPrefixHistory + "close",
-	}
 	out = append(out, []models.InlineKeyboardButton{prev, next})
-	out = append(out, []models.InlineKeyboardButton{closeBtn})
 
 	return &models.InlineKeyboardMarkup{InlineKeyboard: out}
 }
 
-func historyEmptyKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
+func historyEmptyKeyboard() *models.InlineKeyboardMarkup {
 	return &models.InlineKeyboardMarkup{
-		InlineKeyboard: [][]models.InlineKeyboardButton{
-			{{
-				Text:         tgi18n.T(loc, "history.btn.close", nil),
-				CallbackData: CallbackPrefixHistory + "close",
-			}},
-		},
+		InlineKeyboard: [][]models.InlineKeyboardButton{},
 	}
 }
 
 func historyFilterOnlyKeyboard(loc *goi18n.Localizer, category string) *models.InlineKeyboardMarkup {
 	out := historyCategoryRows(loc, category)
-	out = append(out, []models.InlineKeyboardButton{{
-		Text:         tgi18n.T(loc, "history.btn.close", nil),
-		CallbackData: CallbackPrefixHistory + "close",
-	}})
 	return &models.InlineKeyboardMarkup{InlineKeyboard: out}
 }
 

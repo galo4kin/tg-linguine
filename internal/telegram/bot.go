@@ -102,7 +102,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	urlH := handlers.NewURL(deps.Users, deps.Languages, deps.Articles, deps.ArticleRepo, deps.ArticleWords, deps.DB, urlLimiter, deps.Bundle, log)
 	longH := handlers.NewLongArticle(deps.Users, deps.Languages, deps.Articles, deps.ArticleRepo, deps.ArticleWords, deps.DB, deps.Bundle, log)
 	wordsH := handlers.NewWords(deps.Users, deps.ArticleRepo, deps.ArticleWords, deps.WordStatuses, deps.DB, deps.Bundle, log)
-	historyH := handlers.NewHistory(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
+	historyH := handlers.NewHistory(screenMgr, deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	myWordsH := handlers.NewMyWords(deps.Users, deps.Languages, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	quizFSM := session.NewQuiz(studySessionTTL)
@@ -162,6 +162,9 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	})
 	nav.Register(screen.ScreenMe, func(ctx context.Context, b *bot.Bot, chatID int64, _ map[string]string) {
 		meH.ShowForChat(ctx, b, chatID)
+	})
+	nav.Register(screen.ScreenHistory, func(ctx context.Context, b *bot.Bot, chatID int64, sctx map[string]string) {
+		historyH.RenderForChat(ctx, b, chatID, sctx)
 	})
 
 	fallback := handlers.NewFallback(screenMgr, nav, keyWaiter, log)
