@@ -29,8 +29,12 @@
   `superpowers:dispatching-parallel-agents`).
 - **One logical step = one commit** with a clear message.
 - **TodoWrite is the source of truth for in-flight steps.** No task
-  folders, no per-step markdown files on disk — history of completed
-  work lives in `git log`.
+  folders, no per-step markdown files on disk — история завершённых
+  работ живёт в `git log`.
+- **В конце сессии** — если в рабочем дереве остались незакоммиченные
+  изменения, спроси у пользователя, нужно ли их коммитить. Коммить
+  только после подтверждения, что исправления работают. **Push
+  запрещён** — никогда не пушить в remote без явной просьбы.
 
 # Build and verification
 
