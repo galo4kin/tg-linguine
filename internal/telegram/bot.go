@@ -17,8 +17,11 @@ import (
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/llm"
 	"github.com/nikita/tg-linguine/internal/progress"
+	"github.com/nikita/tg-linguine/internal/screen"
 	"github.com/nikita/tg-linguine/internal/session"
+	"github.com/nikita/tg-linguine/internal/storage"
 	"github.com/nikita/tg-linguine/internal/telegram/handlers"
+	"github.com/nikita/tg-linguine/internal/telegram/middleware"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -62,7 +65,15 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 		// recover so panics are caught before they unwind through the bot
 		// loop; then i18n/log/touch so handlers run with localizer in context
 		// and the user's last_seen_at gets bumped before dispatch.
-		bot.WithMiddlewares(tb.trackInflightMiddleware, tb.recoverMiddleware, tb.i18nMiddleware, tb.logMiddleware, tb.touchLastSeenMiddleware),
+		// cleanup is last so it fires after the handler returns.
+		bot.WithMiddlewares(
+			tb.trackInflightMiddleware,
+			tb.recoverMiddleware,
+			tb.i18nMiddleware,
+			tb.logMiddleware,
+			tb.touchLastSeenMiddleware,
+			middleware.Cleanup(log),
+		),
 		// Native quiz polls deliver answers via Update.PollAnswer; that
 		// type is excluded from Telegram's getUpdates default unless we
 		// opt in here. Keep the rest of the standard set explicit so we
@@ -74,6 +85,10 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	if err != nil {
 		return nil, err
 	}
+
+	activeScreenRepo := storage.NewActiveScreenRepo(deps.DB)
+	screenMgr := screen.NewManager(activeScreenRepo, log)
+	nav := handlers.NewNav(screenMgr, log)
 
 	onbFSM := session.NewOnboarding(onboardingTTL)
 	onb := handlers.NewOnboarding(deps.Users, deps.Languages, onbFSM, deps.Bundle, log)
@@ -131,6 +146,10 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixLongArticle, bot.MatchTypePrefix, longH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixWelcome, bot.MatchTypePrefix,
 		handlers.HandleWelcomeCallback(myWordsH, studyH, historyH, settingsH))
+	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, screen.CallbackPrefixNav, bot.MatchTypePrefix, nav.HandleCallback)
+
+	fallback := handlers.NewFallback(screenMgr, nav, keyWaiter, log)
+	b.RegisterHandlerMatchFunc(fallback.Match, fallback.Handle)
 
 	tb.b = b
 	return tb, nil
