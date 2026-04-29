@@ -10,6 +10,7 @@ apikey.rate_limited: "Groq está limitando las solicitudes ahora. Inténtalo en 
 apikey.unavailable: "No se pudo contactar con Groq. Inténtalo más tarde."
 article.fetching: "🔎 Cargando el artículo…"
 article.analyzing: "🧠 Analizando el artículo…"
+article.extracting_vocab: "📚 Extrayendo vocabulario…"
 article.persisting: "💾 Guardando el análisis…"
 article.regenerating: "🪄 Adaptando a {{.Level}}…"
 article.card.cefr: "Nivel detectado: {{.Level}}"

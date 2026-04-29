@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"strings"
 	"time"
 
 	"github.com/nikita/tg-linguine/internal/dictionary"
@@ -98,6 +99,7 @@ type Stage int
 const (
 	StageFetching Stage = iota + 1
 	StageAnalyzing
+	StageExtractingVocab
 	StagePersisting
 )
 
@@ -295,7 +297,7 @@ func (s *Service) AnalyzeArticle(ctx context.Context, userID int64, url string, 
 		}}, nil
 	}
 
-	analyzed, err := s.runAnalysis(ctx, userID, user, key, active.LanguageCode, active.CEFRLevel, extracted, "", onProgress, start, tokensEstimated)
+	analyzed, err := s.runAnalysis(ctx, userID, user, key, active.LanguageCode, active.CEFRLevel, extracted, "", "", onProgress, start, tokensEstimated)
 	if err != nil {
 		return nil, err
 	}
@@ -427,7 +429,7 @@ func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID 
 	}
 
 	tokens := llm.EstimateTokens(transformed.Content)
-	return s.runAnalysis(ctx, userID, user, key, active.LanguageCode, active.CEFRLevel, transformed, noticeText, onProgress, start, tokens)
+	return s.runAnalysis(ctx, userID, user, key, active.LanguageCode, active.CEFRLevel, transformed, extracted.Content, noticeText, onProgress, start, tokens)
 }
 
 // runAnalysis is the shared back half of the URL pipeline used by both the
@@ -437,7 +439,7 @@ func (s *Service) AnalyzeExtracted(ctx context.Context, userID int64, pendingID 
 // resolved the user record + Groq key (passed in here), and trimmed the body
 // to the budget. user and key must be non-nil/non-empty — callers fail-fast
 // upstream when either is missing.
-func (s *Service) runAnalysis(ctx context.Context, userID int64, user *users.User, key string, languageCode, userCEFR string, extracted Extracted, notice string, onProgress ProgressFunc, start time.Time, tokensEstimated int) (*AnalyzedArticle, error) {
+func (s *Service) runAnalysis(ctx context.Context, userID int64, user *users.User, key string, languageCode, userCEFR string, extracted Extracted, fullText string, notice string, onProgress ProgressFunc, start time.Time, tokensEstimated int) (*AnalyzedArticle, error) {
 	knownLemmas, err := s.statuses.KnownLemmas(ctx, s.db, userID, languageCode)
 	if err != nil {
 		return nil, fmt.Errorf("known lemmas: %w", err)
@@ -471,6 +473,22 @@ func (s *Service) runAnalysis(ctx context.Context, userID int64, user *users.Use
 			)
 		}
 		return nil, ErrBlockedContent
+	}
+
+	// Extra vocab pass for long articles: when fullText differs from the
+	// analyzed text, chunk the full original and call ExtractVocab to
+	// find words the main Analyze missed.
+	if fullText != "" && fullText != extracted.Content {
+		progress(onProgress, StageExtractingVocab)
+		extraWords, vocabErr := s.extractVocabChunks(ctx, key, languageCode, user.InterfaceLanguage, userCEFR, fullText, knownLemmas, resp.Words)
+		if vocabErr != nil {
+			if s.log != nil {
+				s.log.Warn("vocab extraction failed, using primary words only",
+					"user_id", userID, "err", vocabErr)
+			}
+		} else if len(extraWords) > 0 {
+			resp.Words = mergeWords(resp.Words, extraWords, s.vocabTarget)
+		}
 	}
 
 	if s.translator != nil {
@@ -575,6 +593,75 @@ func (s *Service) runAnalysis(ctx context.Context, userID int64, user *users.Use
 	}
 
 	return &AnalyzedArticle{Stored: article, Words: storedWords, Notice: notice}, nil
+}
+
+// extractVocabChunks splits the full article text into up to 2 chunks and
+// calls ExtractVocab on each to find words the main Analyze call missed.
+func (s *Service) extractVocabChunks(ctx context.Context, key, lang, nativeLang, cefr, fullText string, knownLemmas []string, alreadyFound []llm.AnalyzedWord) ([]llm.AnalyzedWord, error) {
+	chunks := chunkText(fullText, s.maxTokens)
+	if len(chunks) == 0 {
+		return nil, nil
+	}
+
+	// Build exclusion set: known lemmas + lemmas from the main Analyze call.
+	exclude := make([]string, 0, len(alreadyFound))
+	for _, w := range alreadyFound {
+		exclude = append(exclude, w.Lemma)
+	}
+
+	perChunk := s.vocabTarget / len(chunks)
+	if perChunk < 5 {
+		perChunk = 5
+	}
+
+	var all []llm.AnalyzedWord
+	for _, chunk := range chunks {
+		resp, err := s.llm.ExtractVocab(ctx, key, llm.ExtractVocabRequest{
+			TargetLanguage:     lang,
+			NativeLanguage:     nativeLang,
+			CEFR:               cefr,
+			KnownWords:         knownLemmas,
+			AlreadyFoundLemmas: exclude,
+			ArticleText:        chunk,
+			VocabTarget:        perChunk,
+		})
+		if err != nil {
+			if s.log != nil {
+				s.log.Warn("vocab chunk extraction failed", "err", err)
+			}
+			continue
+		}
+		all = append(all, resp.Words...)
+		for _, w := range resp.Words {
+			exclude = append(exclude, w.Lemma)
+		}
+	}
+	return all, nil
+}
+
+// mergeWords combines primary and extra word lists, deduplicating by
+// lowercased lemma and capping at the target count.
+func mergeWords(primary, extra []llm.AnalyzedWord, cap int) []llm.AnalyzedWord {
+	seen := make(map[string]bool, len(primary))
+	for _, w := range primary {
+		seen[strings.ToLower(w.Lemma)] = true
+	}
+
+	merged := make([]llm.AnalyzedWord, len(primary), len(primary)+len(extra))
+	copy(merged, primary)
+
+	for _, w := range extra {
+		key := strings.ToLower(w.Lemma)
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		merged = append(merged, w)
+		if cap > 0 && len(merged) >= cap {
+			break
+		}
+	}
+	return merged
 }
 
 func progress(p ProgressFunc, s Stage) {

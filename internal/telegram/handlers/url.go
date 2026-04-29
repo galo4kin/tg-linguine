@@ -141,6 +141,8 @@ func (h *URLHandler) Handle(ctx context.Context, b *bot.Bot, update *models.Upda
 			editStatus(tgi18n.T(loc, "article.fetching", nil))
 		case articles.StageAnalyzing:
 			editStatus(tgi18n.T(loc, "article.analyzing", nil))
+		case articles.StageExtractingVocab:
+			editStatus(tgi18n.T(loc, "article.extracting_vocab", nil))
 		case articles.StagePersisting:
 			editStatus(tgi18n.T(loc, "article.persisting", nil))
 		}
