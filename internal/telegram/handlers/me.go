@@ -12,6 +12,7 @@ import (
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
 	"github.com/nikita/tg-linguine/internal/progress"
+	"github.com/nikita/tg-linguine/internal/screen"
 	"github.com/nikita/tg-linguine/internal/users"
 )
 
@@ -19,6 +20,7 @@ import (
 // language, level, total XP, day-streak, and progress toward today's
 // goal.
 type Me struct {
+	mgr       *screen.Manager
 	users     *users.Service
 	languages users.UserLanguageRepository
 	progress  progress.Repository
@@ -29,6 +31,7 @@ type Me struct {
 }
 
 func NewMe(
+	mgr *screen.Manager,
 	svc *users.Service,
 	langs users.UserLanguageRepository,
 	prog progress.Repository,
@@ -38,6 +41,7 @@ func NewMe(
 	log *slog.Logger,
 ) *Me {
 	return &Me{
+		mgr:       mgr,
 		users:     svc,
 		languages: langs,
 		progress:  prog,
@@ -58,6 +62,21 @@ func (h *Me) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Updat
 	if !ok {
 		return
 	}
+	h.showForUser(ctx, b, msg.Chat.ID, u)
+}
+
+// ShowForChat looks up the user by chatID (= Telegram user ID in private chats)
+// and renders the Me screen via Manager. Used by the nav renderer.
+func (h *Me) ShowForChat(ctx context.Context, b *bot.Bot, chatID int64) {
+	u, err := h.users.ByTelegramID(ctx, chatID)
+	if err != nil {
+		h.log.Warn("me: user not found for nav render", "chat_id", chatID, "err", err)
+		return
+	}
+	h.showForUser(ctx, b, chatID, u)
+}
+
+func (h *Me) showForUser(ctx context.Context, b *bot.Bot, chatID int64, u *users.User) {
 	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
 
 	// Roll over so today_correct reflects today's tally even if the user
@@ -69,7 +88,7 @@ func (h *Me) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Updat
 	if err != nil {
 		h.log.Error("me: get progress", "err", err)
 		b.SendMessage(ctx, &bot.SendMessageParams{
-			ChatID: msg.Chat.ID,
+			ChatID: chatID,
 			Text:   tgi18n.T(loc, "error.generic", nil),
 		})
 		return
@@ -102,10 +121,13 @@ func (h *Me) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Updat
 		"Goal":  h.dailyGoal,
 	}))
 
-	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID: msg.Chat.ID,
-		Text:   strings.TrimRight(sb.String(), "\n"),
+	text := strings.TrimRight(sb.String(), "\n")
+	kb := screen.WithNavigation(loc, nil, "", nil)
+	if err := h.mgr.Show(ctx, b, chatID, screen.Screen{
+		ID:       screen.ScreenMe,
+		Text:     text,
+		Keyboard: kb,
 	}); err != nil {
-		h.log.Debug("me: send", "err", err)
+		h.log.Debug("me: show", "err", err)
 	}
 }

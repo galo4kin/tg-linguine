@@ -112,7 +112,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 		XPBonusGoal:  cfg.QuizXPBonusGoal,
 		PollEnabled:  cfg.QuizPollEnabled,
 	}, deps.DB, deps.Bundle, log)
-	meH := handlers.NewMe(deps.Users, deps.Languages, deps.Progress, cfg.QuizDailyGoal, deps.DB, deps.Bundle, log)
+	meH := handlers.NewMe(screenMgr, deps.Users, deps.Languages, deps.Progress, cfg.QuizDailyGoal, deps.DB, deps.Bundle, log)
 	deleteH := handlers.NewDelete(deps.Users, onbFSM, quizFSM, keyWaiter, deps.Bundle, log)
 	settingsH := handlers.NewSettings(screenMgr, deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
 	adminGate := func(uid int64) bool { return IsAdmin(cfg, uid) }
@@ -159,6 +159,9 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 			return
 		}
 		settingsH.ShowMenu(ctx, b, chatID, u)
+	})
+	nav.Register(screen.ScreenMe, func(ctx context.Context, b *bot.Bot, chatID int64, _ map[string]string) {
+		meH.ShowForChat(ctx, b, chatID)
 	})
 
 	fallback := handlers.NewFallback(screenMgr, nav, keyWaiter, log)
