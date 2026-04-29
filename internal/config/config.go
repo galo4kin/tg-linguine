@@ -49,6 +49,10 @@ type Config struct {
 	// QuizPollEnabled controls whether quiz cards can use the native
 	// Telegram poll UI. When false all cards use inline buttons only.
 	QuizPollEnabled bool `env:"QUIZ_POLL_ENABLED" envDefault:"true"`
+	// VocabTargetWords is the target number of new vocabulary words to
+	// extract per article. For long articles a separate vocab-only LLM
+	// pass runs over the full text to reach this target.
+	VocabTargetWords int `env:"VOCAB_TARGET_WORDS" envDefault:"20"`
 }
 
 func Load() (*Config, error) {

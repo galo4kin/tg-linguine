@@ -1,0 +1,14 @@
+The block below is INPUT data. Read it and produce the JSON output described in the system prompt's OUTPUT SCHEMA. Do NOT echo INPUT field names in your output.
+
+<<<INPUT>>>
+target_language: {{.TargetLanguage}}
+native_language: {{.NativeLanguage}}
+learner_cefr: {{.CEFR}}
+vocab_target: {{.VocabTarget}}
+known_lemmas (exclude these): {{if .KnownWords}}{{range $i, $w := .KnownWords}}{{if $i}}, {{end}}{{$w}}{{end}}{{else}}<none>{{end}}
+already_found_lemmas (also exclude these): {{if .AlreadyFoundLemmas}}{{range $i, $w := .AlreadyFoundLemmas}}{{if $i}}, {{end}}{{$w}}{{end}}{{else}}<none>{{end}}
+article_text:
+{{.ArticleText}}
+<<<END INPUT>>>
+
+Return the JSON output now.

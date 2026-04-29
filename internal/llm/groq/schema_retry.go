@@ -15,8 +15,8 @@ import (
 // failed schema.
 //
 // label is the slog message prefix (e.g. "groq.analyze", "groq.adapt").
-func (c *Client) chatJSONWithSchemaRetry(ctx context.Context, key, model string, messages []chatMessage, validate func([]byte) error, label string) ([]byte, error) {
-	raw, err := c.chat(ctx, key, model, messages)
+func (c *Client) chatJSONWithSchemaRetry(ctx context.Context, key, model string, messages []chatMessage, maxTokens int, validate func([]byte) error, label string) ([]byte, error) {
+	raw, err := c.chat(ctx, key, model, messages, maxTokens)
 	if err != nil {
 		return nil, err
 	}
@@ -43,7 +43,7 @@ func (c *Client) chatJSONWithSchemaRetry(ctx context.Context, key, model string,
 		chatMessage{Role: "assistant", Content: string(raw)},
 		chatMessage{Role: "user", Content: "Your previous response failed schema validation: " + llm.RetryMessage(vErr) + ". Reply again with a single JSON object that strictly matches the schema. No prose, no markdown."},
 	)
-	raw, err = c.chat(ctx, key, model, retryMessages)
+	raw, err = c.chat(ctx, key, model, retryMessages, maxTokens)
 	if err != nil {
 		return nil, err
 	}

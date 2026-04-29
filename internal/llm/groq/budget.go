@@ -35,6 +35,12 @@ const (
 	// small enough to keep the request inside FreeTierTPM.
 	ArticleAnalyzeOutputCap = 4000
 
+	// VocabExtractOutputCap is the max_tokens for the vocab-only chat
+	// call. Much smaller than ArticleAnalyzeOutputCap because the
+	// response is just a words array (no summary, adapted versions, or
+	// safety flags). 2000 tokens fits ~15-20 word entries comfortably.
+	VocabExtractOutputCap = 2000
+
 	// SummarizeInputCap is the input-side cap for the pre-summary chat
 	// call (long-article path, ModeSummarize). The Telegram layer
 	// truncates the article body to this many tokens before sending it to

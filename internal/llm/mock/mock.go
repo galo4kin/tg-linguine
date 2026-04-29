@@ -39,6 +39,11 @@ type Provider struct {
 	SummarizeResp string
 	SummarizeErr  error
 
+	// ExtractVocabResp / ExtractVocabErr drive the vocab-only chunk
+	// extraction pass for long articles.
+	ExtractVocabResp llm.ExtractVocabResponse
+	ExtractVocabErr  error
+
 	// ValidateErr is returned by ValidateAPIKey. Nil means the key is
 	// accepted as valid.
 	ValidateErr error
@@ -46,9 +51,10 @@ type Provider struct {
 	// Calls records every invocation in order so tests can assert on the
 	// fields the article pipeline forwarded (KnownWords, target language,
 	// etc.) without exposing the underlying loop.
-	AnalyzeCalls   []llm.AnalyzeRequest
-	AdaptCalls     []llm.AdaptRequest
-	SummarizeCalls []llm.SummarizeRequest
+	AnalyzeCalls      []llm.AnalyzeRequest
+	AdaptCalls        []llm.AdaptRequest
+	SummarizeCalls    []llm.SummarizeRequest
+	ExtractVocabCalls []llm.ExtractVocabRequest
 }
 
 // LoadAnalyze reads `fixtures/<name>.json`, validates it against the live
@@ -129,6 +135,14 @@ func (p *Provider) Summarize(ctx context.Context, key string, req llm.SummarizeR
 		return "", p.SummarizeErr
 	}
 	return p.SummarizeResp, nil
+}
+
+func (p *Provider) ExtractVocab(ctx context.Context, key string, req llm.ExtractVocabRequest) (llm.ExtractVocabResponse, error) {
+	p.ExtractVocabCalls = append(p.ExtractVocabCalls, req)
+	if p.ExtractVocabErr != nil {
+		return llm.ExtractVocabResponse{}, p.ExtractVocabErr
+	}
+	return p.ExtractVocabResp, nil
 }
 
 // Compile-time guarantee that Provider satisfies the llm.Provider contract.

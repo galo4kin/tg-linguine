@@ -130,10 +130,11 @@ type Service struct {
 	dict      dictionary.Repository
 	awords    dictionary.ArticleWordsRepository
 	statuses  dictionary.UserWordStatusRepository
-	maxTokens int
-	blocklist *Blocklist
-	pending   *PendingStore
-	log       *slog.Logger
+	maxTokens   int
+	vocabTarget int
+	blocklist   *Blocklist
+	pending     *PendingStore
+	log         *slog.Logger
 }
 
 type ServiceDeps struct {
@@ -153,25 +154,35 @@ type ServiceDeps struct {
 	// MaxTokens caps the estimated token count of an article before we
 	// invoke the LLM. Zero means use DefaultMaxTokensPerArticle.
 	MaxTokens int
+	// VocabTargetWords is the target number of vocabulary words to
+	// extract per article. Zero means 20.
+	VocabTargetWords int
 	// Blocklist gates URLs by host before the network call. Nil means
 	// "no blocking" — used by tests that don't care about safety.
 	Blocklist *Blocklist
 	Log       *slog.Logger
 }
 
+const DefaultVocabTargetWords = 20
+
 func NewService(d ServiceDeps) *Service {
 	maxTokens := d.MaxTokens
 	if maxTokens <= 0 {
 		maxTokens = DefaultMaxTokensPerArticle
 	}
+	vocabTarget := d.VocabTargetWords
+	if vocabTarget <= 0 {
+		vocabTarget = DefaultVocabTargetWords
+	}
 	return &Service{
 		db: d.DB, users: d.Users, languages: d.Languages, keys: d.Keys,
 		extractor: d.Extractor, llm: d.LLM, translator: d.Translator,
 		articles: d.Articles, dict: d.Dictionary, awords: d.ArticleWords, statuses: d.Statuses,
-		maxTokens: maxTokens,
-		blocklist: d.Blocklist,
-		pending:   NewPendingStore(0),
-		log:       d.Log,
+		maxTokens:   maxTokens,
+		vocabTarget: vocabTarget,
+		blocklist:   d.Blocklist,
+		pending:     NewPendingStore(0),
+		log:         d.Log,
 	}
 }
 

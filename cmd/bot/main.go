@@ -109,8 +109,9 @@ func main() {
 		Dictionary:   dictRepo,
 		ArticleWords: articleWordsRepo,
 		Statuses:     statusRepo,
-		MaxTokens:    cfg.MaxTokensPerArticle,
-		Blocklist:    blocklist,
+		MaxTokens:        cfg.MaxTokensPerArticle,
+		VocabTargetWords: cfg.VocabTargetWords,
+		Blocklist:        blocklist,
 		Translator:   yandexTranslator,
 		Log:          log,
 	})

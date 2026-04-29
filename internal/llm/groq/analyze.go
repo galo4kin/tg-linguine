@@ -63,7 +63,7 @@ func (c *Client) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest
 		{Role: "user", Content: userPrompt},
 	}
 
-	raw, err := c.chatJSONWithSchemaRetry(ctx, key, model, messages, llm.ValidateAnalysisJSON, "groq.analyze")
+	raw, err := c.chatJSONWithSchemaRetry(ctx, key, model, messages, ArticleAnalyzeOutputCap, llm.ValidateAnalysisJSON, "groq.analyze")
 	if err != nil {
 		return llm.AnalyzeResponse{}, err
 	}
@@ -75,12 +75,12 @@ func (c *Client) Analyze(ctx context.Context, key string, req llm.AnalyzeRequest
 	return out, nil
 }
 
-func (c *Client) chat(ctx context.Context, key, model string, messages []chatMessage) ([]byte, error) {
+func (c *Client) chat(ctx context.Context, key, model string, messages []chatMessage, maxTokens int) ([]byte, error) {
 	body, err := json.Marshal(chatRequest{
 		Model:          model,
 		Messages:       messages,
 		ResponseFormat: chatResponseFormat{Type: "json_object"},
-		MaxTokens:      ArticleAnalyzeOutputCap,
+		MaxTokens:      maxTokens,
 	})
 	if err != nil {
 		return nil, fmt.Errorf("groq: marshal request: %w", err)

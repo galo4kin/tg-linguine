@@ -26,7 +26,7 @@ func (c *Client) Adapt(ctx context.Context, key string, req llm.AdaptRequest) (l
 		{Role: "user", Content: userPrompt},
 	}
 
-	raw, err := c.chatJSONWithSchemaRetry(ctx, key, model, messages, llm.ValidateAdaptJSON, "groq.adapt")
+	raw, err := c.chatJSONWithSchemaRetry(ctx, key, model, messages, ArticleAnalyzeOutputCap, llm.ValidateAdaptJSON, "groq.adapt")
 	if err != nil {
 		return llm.AdaptResponse{}, err
 	}
