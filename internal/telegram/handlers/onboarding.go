@@ -136,6 +136,7 @@ func (h *Onboarding) HandleLevel(ctx context.Context, b *bot.Bot, update *models
 		})
 	}
 	h.log.Info("onboarding complete", "user_id", u.ID, "language", snap.Language, "level", level)
+	SendWelcome(ctx, b, chatID)
 	h.answer(ctx, b, cq.ID)
 }
 

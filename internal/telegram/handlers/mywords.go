@@ -46,9 +46,9 @@ func (f myWordsFilter) statuses() []dictionary.WordStatus {
 	case myWordsFilterLearning:
 		return []dictionary.WordStatus{dictionary.StatusLearning}
 	case myWordsFilterKnown:
-		return []dictionary.WordStatus{dictionary.StatusKnown}
+		return []dictionary.WordStatus{dictionary.StatusKnown, dictionary.StatusMastered}
 	case myWordsFilterMastered:
-		return []dictionary.WordStatus{dictionary.StatusMastered}
+		return []dictionary.WordStatus{dictionary.StatusKnown, dictionary.StatusMastered}
 	default:
 		return []dictionary.WordStatus{
 			dictionary.StatusLearning,
@@ -316,10 +316,25 @@ func (h *MyWords) buildList(ctx context.Context, userID int64, lang string, loc 
 		return tgi18n.T(loc, "error.generic", nil), backToCloseKeyboard(loc)
 	}
 	if total == 0 {
-		return tgi18n.T(loc, "mywords.empty", map[string]string{
+		text := tgi18n.T(loc, "mywords.empty", map[string]string{
 			"Filter":   tgi18n.T(loc, f.labelKey(), nil),
 			"Language": strings.ToUpper(lang),
-		}), filterRowAndCloseKeyboard(loc, f)
+		})
+		// If the entire vocabulary is empty (not just the current filter),
+		// drop the filter row — every filter would be empty, so the buttons
+		// are noise.
+		if f == myWordsFilterAll {
+			return text, backToCloseKeyboard(loc)
+		}
+		grandTotal, err := h.statuses.CountUserWords(ctx, h.db, userID, lang, myWordsFilterAll.statuses())
+		if err != nil {
+			h.log.Error("mywords: count all", "err", err)
+			return tgi18n.T(loc, "error.generic", nil), backToCloseKeyboard(loc)
+		}
+		if grandTotal == 0 {
+			return text, backToCloseKeyboard(loc)
+		}
+		return text, filterRowAndCloseKeyboard(loc, f)
 	}
 	totalPages := (total + myWordsPageSize - 1) / myWordsPageSize
 	if page < 0 {
@@ -407,7 +422,7 @@ func backToCloseKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 }
 
 func filterRow(loc *goi18n.Localizer, current myWordsFilter) []models.InlineKeyboardButton {
-	all := []myWordsFilter{myWordsFilterAll, myWordsFilterLearning, myWordsFilterKnown, myWordsFilterMastered}
+	all := []myWordsFilter{myWordsFilterAll, myWordsFilterLearning, myWordsFilterKnown}
 	row := make([]models.InlineKeyboardButton, 0, len(all))
 	for _, f := range all {
 		label := tgi18n.T(loc, f.labelKey(), nil)
