@@ -314,6 +314,8 @@ func (tb *Bot) touchLastSeenMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 			tgID = update.Message.From.ID
 		case update.CallbackQuery != nil:
 			tgID = update.CallbackQuery.From.ID
+		case update.PollAnswer != nil && update.PollAnswer.User != nil:
+			tgID = update.PollAnswer.User.ID
 		}
 		if tgID != 0 && tb.users != nil {
 			if err := tb.users.TouchLastSeen(ctx, tgID); err != nil {

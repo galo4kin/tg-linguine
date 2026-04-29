@@ -43,6 +43,11 @@ type QuizScoring struct {
 //	study:close                      — dismiss the summary message
 const CallbackPrefixStudy = "study:"
 
+type lastBotMessage struct {
+	ChatID    int64
+	MessageID int
+}
+
 // Study runs quiz rounds (multiple choice) backed by the in-memory
 // session.Quiz FSM and the dictionary status repo. The struct keeps the
 // historical "Study" name because it is wired into bot.go and external
@@ -68,6 +73,9 @@ type Study struct {
 	// per-user lifecycle: cleared on Start, read at End/summary.
 	roundMu sync.Mutex
 	roundXP map[int64]int
+
+	lastMsgMu sync.Mutex
+	lastMsg   map[int64]lastBotMessage
 }
 
 func NewStudy(
@@ -96,6 +104,7 @@ func NewStudy(
 		rng:       rand.New(rand.NewSource(rand.Int63())),
 		now:       time.Now,
 		roundXP:   make(map[int64]int),
+		lastMsg:   make(map[int64]lastBotMessage),
 	}
 }
 
@@ -122,6 +131,7 @@ func (h *Study) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Up
 	h.polls.DropForUser(u.ID)
 	h.fsm.Start(u.ID, deck)
 	h.resetRoundXP(u.ID)
+	h.clearLastMsg(u.ID)
 	if err := h.progress.RolloverIfNewDay(ctx, h.db, u.ID, h.now()); err != nil {
 		h.log.Error("quiz cmd: rollover", "err", err)
 	}
@@ -181,6 +191,7 @@ func (h *Study) startRound(ctx context.Context, b *bot.Bot, userID int64, loc *g
 	h.polls.DropForUser(userID)
 	h.fsm.Start(userID, deck)
 	h.resetRoundXP(userID)
+	h.clearLastMsg(userID)
 	if err := h.progress.RolloverIfNewDay(ctx, h.db, userID, h.now()); err != nil {
 		h.log.Error("quiz cb: rollover", "err", err)
 	}
@@ -292,6 +303,72 @@ func (h *Study) resetRoundXP(userID int64) {
 	delete(h.roundXP, userID)
 }
 
+func (h *Study) setLastMsg(userID int64, chatID int64, msgID int) {
+	h.lastMsgMu.Lock()
+	defer h.lastMsgMu.Unlock()
+	h.lastMsg[userID] = lastBotMessage{ChatID: chatID, MessageID: msgID}
+}
+
+func (h *Study) takeLastMsg(userID int64) (lastBotMessage, bool) {
+	h.lastMsgMu.Lock()
+	defer h.lastMsgMu.Unlock()
+	lm, ok := h.lastMsg[userID]
+	if ok {
+		delete(h.lastMsg, userID)
+	}
+	return lm, ok
+}
+
+func (h *Study) clearLastMsg(userID int64) {
+	h.lastMsgMu.Lock()
+	defer h.lastMsgMu.Unlock()
+	delete(h.lastMsg, userID)
+}
+
+func (h *Study) deleteLastMessage(ctx context.Context, b *bot.Bot, userID int64) {
+	lm, ok := h.takeLastMsg(userID)
+	if !ok {
+		return
+	}
+	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+		ChatID:    lm.ChatID,
+		MessageID: lm.MessageID,
+	}); err != nil {
+		h.log.Debug("quiz: delete last msg", "err", err)
+	}
+}
+
+func (h *Study) sendHTMLAndTrack(ctx context.Context, b *bot.Bot, userID int64, chatID int64, text string, kb *models.InlineKeyboardMarkup) {
+	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        text,
+		ParseMode:   models.ParseModeHTML,
+		ReplyMarkup: kb,
+	})
+	if err != nil {
+		h.log.Error("quiz: send html", "err", err)
+		return
+	}
+	if sent != nil {
+		h.setLastMsg(userID, chatID, sent.ID)
+	}
+}
+
+func (h *Study) sendAndTrack(ctx context.Context, b *bot.Bot, userID int64, chatID int64, text string, kb *models.InlineKeyboardMarkup) {
+	sent, err := b.SendMessage(ctx, &bot.SendMessageParams{
+		ChatID:      chatID,
+		Text:        text,
+		ReplyMarkup: kb,
+	})
+	if err != nil {
+		h.log.Error("quiz: send msg", "err", err)
+		return
+	}
+	if sent != nil {
+		h.setLastMsg(userID, chatID, sent.ID)
+	}
+}
+
 func (h *Study) handleSkip(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
 	snap, ok := h.fsm.Snapshot(userID)
 	if !ok {
@@ -303,7 +380,14 @@ func (h *Study) handleSkip(ctx context.Context, b *bot.Bot, userID int64, loc *g
 		return
 	}
 	card := snap.Current()
+	isPoll := card.UIMode == session.QuizUIPoll
 	if _, ok := h.fsm.RecordSkip(userID); !ok {
+		return
+	}
+	if isPoll {
+		h.polls.DropForUser(userID)
+		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+		h.sendHTMLAndTrack(ctx, b, userID, chatIDInt64(chatID), renderQuizSkipFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
 		return
 	}
 	h.editToHTML(ctx, b, chatID, msgID, renderQuizSkipFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
@@ -330,11 +414,18 @@ func (h *Study) handleDelete(ctx context.Context, b *bot.Bot, userID int64, loc 
 		return
 	}
 	card := snap.Current()
+	isPoll := card.UIMode == session.QuizUIPoll
 	if err := h.statuses.DeleteWordStatus(ctx, h.db, userID, wordID); err != nil {
 		h.log.Error("quiz cb: delete word status", "err", err)
 		return
 	}
 	if _, ok := h.fsm.RecordSkip(userID); !ok {
+		return
+	}
+	if isPoll {
+		h.polls.DropForUser(userID)
+		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+		h.sendHTMLAndTrack(ctx, b, userID, chatIDInt64(chatID), renderQuizDeleteFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
 		return
 	}
 	h.editToHTML(ctx, b, chatID, msgID, renderQuizDeleteFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
@@ -359,7 +450,7 @@ func (h *Study) renderState(ctx context.Context, b *bot.Bot, userID int64, loc *
 	// API. Drop the dangling keyboard from the clicked message and send
 	// a fresh poll instead.
 	if snap.Current().UIMode == session.QuizUIPoll {
-		h.clearKeyboard(ctx, b, chatID, msgID)
+		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
 		h.sendCurrentCard(ctx, b, userID, loc, chatIDInt64(chatID))
 		return
 	}
@@ -367,6 +458,9 @@ func (h *Study) renderState(ctx context.Context, b *bot.Bot, userID int64, loc *
 }
 
 func (h *Study) endAndSummarize(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
+	snap, hasSnap := h.fsm.Snapshot(userID)
+	isPoll := hasSnap && !snap.Done() && snap.Current().UIMode == session.QuizUIPoll
+
 	final, ok := h.fsm.End(userID)
 	if !ok {
 		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
@@ -375,7 +469,13 @@ func (h *Study) endAndSummarize(ctx context.Context, b *bot.Bot, userID int64, l
 	h.polls.DropForUser(userID)
 	roundXP := h.takeRoundXP(userID)
 	prog := h.fetchProgress(ctx, userID)
-	h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP), quizSummaryKeyboard(loc))
+	summary := renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP)
+	if isPoll {
+		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+		h.sendAndTrack(ctx, b, userID, chatIDInt64(chatID), summary, quizSummaryKeyboard(loc))
+		return
+	}
+	h.editTo(ctx, b, chatID, msgID, summary, quizSummaryKeyboard(loc))
 }
 
 func (h *Study) fetchProgress(ctx context.Context, userID int64) *progress.UserProgress {
@@ -763,6 +863,16 @@ func quizCloseKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 	}}
 }
 
+func quizPollControlKeyboard(loc *goi18n.Localizer, card session.QuizCard) *models.InlineKeyboardMarkup {
+	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
+		{
+			{Text: tgi18n.T(loc, "quiz.btn.skip", nil), CallbackData: CallbackPrefixStudy + "skip"},
+			{Text: tgi18n.T(loc, "quiz.btn.del", nil), CallbackData: fmt.Sprintf("%sdel:%d", CallbackPrefixStudy, card.DictionaryWordID)},
+			{Text: tgi18n.T(loc, "quiz.btn.end", nil), CallbackData: CallbackPrefixStudy + "end"},
+		},
+	}}
+}
+
 // pollQuestionMaxLen is Telegram's hard limit on poll question text;
 // option strings are capped at 100. We cut a few chars below the wire
 // limits to leave room for the ellipsis suffix.
@@ -782,11 +892,14 @@ func (h *Study) sendCurrentCard(ctx context.Context, b *bot.Bot, userID int64, l
 	}
 	card := snap.Current()
 	if card.UIMode != session.QuizUIPoll {
-		b.SendMessage(ctx, &bot.SendMessageParams{
+		sent, _ := b.SendMessage(ctx, &bot.SendMessageParams{
 			ChatID:      chatID,
 			Text:        renderQuizQuestion(loc, snap),
 			ReplyMarkup: quizQuestionKeyboard(loc, snap),
 		})
+		if sent != nil {
+			h.setLastMsg(userID, chatID, sent.ID)
+		}
 		return
 	}
 
@@ -806,6 +919,7 @@ func (h *Study) sendCurrentCard(ctx context.Context, b *bot.Bot, userID int64, l
 		Type:            "quiz",
 		CorrectOptionID: card.CorrectIndex,
 		IsAnonymous:     &isAnonymous,
+		ReplyMarkup:     quizPollControlKeyboard(loc, card),
 	})
 	if err != nil || msg == nil || msg.Poll == nil {
 		h.log.Error("quiz: send poll", "err", err)
@@ -817,6 +931,7 @@ func (h *Study) sendCurrentCard(ctx context.Context, b *bot.Bot, userID int64, l
 		MessageID: msg.ID,
 		Card:      card,
 	})
+	h.setLastMsg(userID, chatID, msg.ID)
 }
 
 // HandlePollAnswer is wired in bot.go via a custom MatchFunc that fires
@@ -885,14 +1000,25 @@ func (h *Study) HandlePollAnswer(ctx context.Context, b *bot.Bot, update *models
 	// Feedback message: same renderer as inline mode, but the cursor
 	// has already advanced so we re-derive the "card N/N" header from
 	// the prior position.
+	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
+		ChatID:    entry.ChatID,
+		MessageID: entry.MessageID,
+	}); err != nil {
+		h.log.Debug("quiz poll: delete poll msg", "err", err)
+	}
+
 	prev := session.QuizSnapshot{Deck: snap.Deck, Cursor: snap.Cursor - 1, Correct: snap.Correct, Wrong: snap.Wrong, Mastered: snap.Mastered}
-	if _, err := b.SendMessage(ctx, &bot.SendMessageParams{
+	fbMsg, err := b.SendMessage(ctx, &bot.SendMessageParams{
 		ChatID:      entry.ChatID,
 		Text:        renderQuizFeedback(loc, prev, card, picked, correct, mastered, progressInfo),
 		ParseMode:   models.ParseModeHTML,
 		ReplyMarkup: quizFeedbackKeyboard(loc),
-	}); err != nil {
+	})
+	if err != nil {
 		h.log.Error("quiz poll: send feedback", "err", err)
+	}
+	if fbMsg != nil {
+		h.setLastMsg(entry.UserID, entry.ChatID, fbMsg.ID)
 	}
 }
 
