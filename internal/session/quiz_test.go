@@ -180,7 +180,7 @@ func TestPickQuizDirectionAndUIMode_Distribute(t *testing.T) {
 	uiCounts := map[session.QuizUIMode]int{}
 	for i := 0; i < 200; i++ {
 		dirCounts[session.PickQuizDirection(rng)]++
-		uiCounts[session.PickQuizUIMode(rng)]++
+		uiCounts[session.PickQuizUIMode(rng, true)]++
 	}
 	// Both buckets must be hit at least once over 200 samples — sanity, not stats.
 	if dirCounts[session.QuizForeignToNative] == 0 || dirCounts[session.QuizNativeToForeign] == 0 {

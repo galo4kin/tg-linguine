@@ -28,6 +28,7 @@ type QuizScoring struct {
 	XPPerCorrect int
 	DailyGoal    int
 	XPBonusGoal  int
+	PollEnabled  bool
 }
 
 // CallbackPrefixStudy still drives the `/study` flow even after the
@@ -57,9 +58,8 @@ type Study struct {
 	languages users.UserLanguageRepository
 	statuses  dictionary.UserWordStatusRepository
 	progress  progress.Repository
-	fsm       *session.Quiz
-	polls     *session.QuizPolls
-	scoring   QuizScoring
+	fsm     *session.Quiz
+	scoring QuizScoring
 	bundle    *goi18n.Bundle
 	log       *slog.Logger
 	db        *sql.DB
@@ -84,7 +84,6 @@ func NewStudy(
 	statuses dictionary.UserWordStatusRepository,
 	prog progress.Repository,
 	fsm *session.Quiz,
-	polls *session.QuizPolls,
 	scoring QuizScoring,
 	db *sql.DB,
 	bundle *goi18n.Bundle,
@@ -96,7 +95,6 @@ func NewStudy(
 		statuses:  statuses,
 		progress:  prog,
 		fsm:       fsm,
-		polls:     polls,
 		scoring:   scoring,
 		bundle:    bundle,
 		log:       log,
@@ -128,7 +126,7 @@ func (h *Study) HandleCommand(ctx context.Context, b *bot.Bot, update *models.Up
 		})
 		return
 	}
-	h.polls.DropForUser(u.ID)
+
 	h.fsm.Start(u.ID, deck)
 	h.resetRoundXP(u.ID)
 	h.clearLastMsg(u.ID)
@@ -165,7 +163,7 @@ func (h *Study) HandleCallback(ctx context.Context, b *bot.Bot, update *models.U
 	case payload == "end":
 		h.endAndSummarize(ctx, b, u.ID, loc, chatID, msgID)
 	case payload == "next":
-		h.renderState(ctx, b, u.ID, loc, chatID, msgID)
+		h.handleNext(ctx, b, u.ID, loc, chatID, msgID)
 	case payload == "skip":
 		h.handleSkip(ctx, b, u.ID, loc, chatID, msgID)
 	case strings.HasPrefix(payload, "del:"):
@@ -188,7 +186,7 @@ func (h *Study) startRound(ctx context.Context, b *bot.Bot, userID int64, loc *g
 		}
 		return
 	}
-	h.polls.DropForUser(userID)
+
 	h.fsm.Start(userID, deck)
 	h.resetRoundXP(userID)
 	h.clearLastMsg(userID)
@@ -369,6 +367,32 @@ func (h *Study) sendAndTrack(ctx context.Context, b *bot.Bot, userID int64, chat
 	}
 }
 
+func (h *Study) handleNext(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
+	snap, ok := h.fsm.Snapshot(userID)
+	if !ok {
+		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
+		return
+	}
+	if !snap.Done() && snap.Current().UIMode == session.QuizUIPoll {
+		h.fsm.RecordSkip(userID)
+		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
+		snap2, ok2 := h.fsm.Snapshot(userID)
+		if !ok2 {
+			return
+		}
+		if snap2.Done() {
+			final, _ := h.fsm.End(userID)
+			roundXP := h.takeRoundXP(userID)
+			prog := h.fetchProgress(ctx, userID)
+			h.sendAndTrack(ctx, b, userID, chatIDInt64(chatID), renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP), quizSummaryKeyboard(loc))
+			return
+		}
+		h.sendCurrentCard(ctx, b, userID, loc, chatIDInt64(chatID))
+		return
+	}
+	h.renderState(ctx, b, userID, loc, chatID, msgID)
+}
+
 func (h *Study) handleSkip(ctx context.Context, b *bot.Bot, userID int64, loc *goi18n.Localizer, chatID any, msgID int) {
 	snap, ok := h.fsm.Snapshot(userID)
 	if !ok {
@@ -385,7 +409,7 @@ func (h *Study) handleSkip(ctx context.Context, b *bot.Bot, userID int64, loc *g
 		return
 	}
 	if isPoll {
-		h.polls.DropForUser(userID)
+	
 		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
 		h.sendHTMLAndTrack(ctx, b, userID, chatIDInt64(chatID), renderQuizSkipFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
 		return
@@ -423,7 +447,7 @@ func (h *Study) handleDelete(ctx context.Context, b *bot.Bot, userID int64, loc 
 		return
 	}
 	if isPoll {
-		h.polls.DropForUser(userID)
+	
 		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
 		h.sendHTMLAndTrack(ctx, b, userID, chatIDInt64(chatID), renderQuizDeleteFeedback(loc, snap, card), quizFeedbackKeyboard(loc))
 		return
@@ -439,7 +463,7 @@ func (h *Study) renderState(ctx context.Context, b *bot.Bot, userID int64, loc *
 	}
 	if snap.Done() {
 		final, _ := h.fsm.End(userID)
-		h.polls.DropForUser(userID)
+	
 		roundXP := h.takeRoundXP(userID)
 		prog := h.fetchProgress(ctx, userID)
 		h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP), quizSummaryKeyboard(loc))
@@ -466,7 +490,7 @@ func (h *Study) endAndSummarize(ctx context.Context, b *bot.Bot, userID int64, l
 		h.editTo(ctx, b, chatID, msgID, tgi18n.T(loc, "quiz.expired", nil), quizCloseKeyboard(loc))
 		return
 	}
-	h.polls.DropForUser(userID)
+
 	roundXP := h.takeRoundXP(userID)
 	prog := h.fetchProgress(ctx, userID)
 	summary := renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP)
@@ -620,7 +644,7 @@ func (h *Study) pickDirection() session.QuizDirection {
 func (h *Study) pickUIMode() session.QuizUIMode {
 	h.rngMu.Lock()
 	defer h.rngMu.Unlock()
-	return session.PickQuizUIMode(h.rng)
+	return session.PickQuizUIMode(h.rng, h.scoring.PollEnabled)
 }
 
 func (h *Study) buildOptions(correct string, distractors []string, want int) ([]string, int) {
@@ -866,7 +890,7 @@ func quizCloseKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 func quizPollControlKeyboard(loc *goi18n.Localizer, card session.QuizCard) *models.InlineKeyboardMarkup {
 	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
 		{
-			{Text: tgi18n.T(loc, "quiz.btn.skip", nil), CallbackData: CallbackPrefixStudy + "skip"},
+			{Text: tgi18n.T(loc, "quiz.btn.next", nil), CallbackData: CallbackPrefixStudy + "next"},
 			{Text: tgi18n.T(loc, "quiz.btn.del", nil), CallbackData: fmt.Sprintf("%sdel:%d", CallbackPrefixStudy, card.DictionaryWordID)},
 			{Text: tgi18n.T(loc, "quiz.btn.end", nil), CallbackData: CallbackPrefixStudy + "end"},
 		},
@@ -925,107 +949,7 @@ func (h *Study) sendCurrentCard(ctx context.Context, b *bot.Bot, userID int64, l
 		h.log.Error("quiz: send poll", "err", err)
 		return
 	}
-	h.polls.Add(msg.Poll.ID, session.QuizPollEntry{
-		UserID:    userID,
-		ChatID:    chatID,
-		MessageID: msg.ID,
-		Card:      card,
-	})
 	h.setLastMsg(userID, chatID, msg.ID)
-}
-
-// HandlePollAnswer is wired in bot.go via a custom MatchFunc that fires
-// for any update carrying a non-nil PollAnswer. It correlates the answer
-// to a stored card, records the result, and posts a feedback message
-// with a "Next" button.
-func (h *Study) HandlePollAnswer(ctx context.Context, b *bot.Bot, update *models.Update) {
-	if update == nil || update.PollAnswer == nil || update.PollAnswer.User == nil {
-		return
-	}
-	pa := update.PollAnswer
-	entry, ok := h.polls.Take(pa.PollID)
-	if !ok {
-		// Could be a poll from a previous bot run, or one the user
-		// abandoned by hitting "Finish" on a sibling inline question.
-		h.log.Debug("quiz poll: unknown poll id", "poll_id", pa.PollID)
-		return
-	}
-	if entry.UserID != pa.User.ID {
-		// Group polls would let other users vote; we render quizzes only
-		// in private chats, but stay defensive.
-		return
-	}
-	if len(pa.OptionIDs) == 0 {
-		// Vote retraction; ignore. Telegram only sends this for non-quiz
-		// polls, but spec allows empty option_ids.
-		return
-	}
-	picked := pa.OptionIDs[0]
-	card := entry.Card
-	correct := picked == card.CorrectIndex
-
-	// Resolve the user's locale for feedback wording.
-	u, _, err := h.users.RegisterUser(ctx, users.TelegramUser{
-		ID:           pa.User.ID,
-		Username:     pa.User.Username,
-		FirstName:    pa.User.FirstName,
-		LanguageCode: pa.User.LanguageCode,
-	})
-	if err != nil {
-		h.log.Error("quiz poll: register user", "err", err)
-		return
-	}
-	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
-
-	// FSM cursor must move regardless of the dictionary write outcome —
-	// otherwise a transient DB error strands the round.
-	var mastered bool
-	if correct {
-		_, m, err := h.statuses.RecordCorrect(ctx, h.db, u.ID, card.DictionaryWordID, session.QuizMasteryThreshold)
-		if err != nil && !errors.Is(err, dictionary.ErrNotFound) {
-			h.log.Error("quiz poll: record correct", "err", err)
-		}
-		mastered = m
-	} else {
-		if err := h.statuses.RecordWrong(ctx, h.db, u.ID, card.DictionaryWordID); err != nil && !errors.Is(err, dictionary.ErrNotFound) {
-			h.log.Error("quiz poll: record wrong", "err", err)
-		}
-	}
-	progressInfo := h.applyProgress(ctx, u.ID, correct)
-	snap, ok := h.fsm.RecordAnswer(u.ID, correct, mastered)
-	if !ok {
-		return
-	}
-
-	// Feedback message: same renderer as inline mode, but the cursor
-	// has already advanced so we re-derive the "card N/N" header from
-	// the prior position.
-	if _, err := b.DeleteMessage(ctx, &bot.DeleteMessageParams{
-		ChatID:    entry.ChatID,
-		MessageID: entry.MessageID,
-	}); err != nil {
-		h.log.Debug("quiz poll: delete poll msg", "err", err)
-	}
-
-	prev := session.QuizSnapshot{Deck: snap.Deck, Cursor: snap.Cursor - 1, Correct: snap.Correct, Wrong: snap.Wrong, Mastered: snap.Mastered}
-	fbMsg, err := b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      entry.ChatID,
-		Text:        renderQuizFeedback(loc, prev, card, picked, correct, mastered, progressInfo),
-		ParseMode:   models.ParseModeHTML,
-		ReplyMarkup: quizFeedbackKeyboard(loc),
-	})
-	if err != nil {
-		h.log.Error("quiz poll: send feedback", "err", err)
-	}
-	if fbMsg != nil {
-		h.setLastMsg(entry.UserID, entry.ChatID, fbMsg.ID)
-	}
-}
-
-// MatchPollAnswer is the matcher passed to RegisterHandlerMatchFunc so
-// that updates carrying a PollAnswer get routed to HandlePollAnswer.
-func MatchPollAnswer(u *models.Update) bool {
-	return u != nil && u.PollAnswer != nil
 }
 
 // renderQuizPollQuestion renders the same prompt as renderQuizQuestion

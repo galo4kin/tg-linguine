@@ -67,7 +67,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 		// type is excluded from Telegram's getUpdates default unless we
 		// opt in here. Keep the rest of the standard set explicit so we
 		// don't silently drop something.
-		bot.WithAllowedUpdates(bot.AllowedUpdates{"message", "edited_message", "callback_query", "poll_answer"}),
+		bot.WithAllowedUpdates(bot.AllowedUpdates{"message", "edited_message", "callback_query"}),
 	}
 
 	b, err := bot.New(cfg.BotToken, opts...)
@@ -89,11 +89,11 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	cardH := handlers.NewCard(deps.Users, deps.Languages, deps.ArticleRepo, deps.ArticleWords, deps.Articles, deps.DB, deps.Bundle, log)
 	myWordsH := handlers.NewMyWords(deps.Users, deps.Languages, deps.WordStatuses, deps.DB, deps.Bundle, log)
 	quizFSM := session.NewQuiz(studySessionTTL)
-	quizPolls := session.NewQuizPolls(studySessionTTL)
-	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, deps.Progress, quizFSM, quizPolls, handlers.QuizScoring{
+	studyH := handlers.NewStudy(deps.Users, deps.Languages, deps.WordStatuses, deps.Progress, quizFSM, handlers.QuizScoring{
 		XPPerCorrect: cfg.QuizXPPerCorrect,
 		DailyGoal:    cfg.QuizDailyGoal,
 		XPBonusGoal:  cfg.QuizXPBonusGoal,
+		PollEnabled:  cfg.QuizPollEnabled,
 	}, deps.DB, deps.Bundle, log)
 	meH := handlers.NewMe(deps.Users, deps.Languages, deps.Progress, cfg.QuizDailyGoal, deps.DB, deps.Bundle, log)
 	deleteH := handlers.NewDelete(deps.Users, onbFSM, quizFSM, keyWaiter, deps.Bundle, log)
@@ -127,8 +127,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixSettings, bot.MatchTypePrefix, settingsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixMyWords, bot.MatchTypePrefix, myWordsH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixStudy, bot.MatchTypePrefix, studyH.HandleCallback)
-	b.RegisterHandlerMatchFunc(handlers.MatchPollAnswer, studyH.HandlePollAnswer)
-	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixDelete, bot.MatchTypePrefix, deleteH.HandleCallback)
+b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixDelete, bot.MatchTypePrefix, deleteH.HandleCallback)
 	b.RegisterHandler(bot.HandlerTypeCallbackQueryData, handlers.CallbackPrefixLongArticle, bot.MatchTypePrefix, longH.HandleCallback)
 
 	tb.b = b
@@ -314,8 +313,6 @@ func (tb *Bot) touchLastSeenMiddleware(next bot.HandlerFunc) bot.HandlerFunc {
 			tgID = update.Message.From.ID
 		case update.CallbackQuery != nil:
 			tgID = update.CallbackQuery.From.ID
-		case update.PollAnswer != nil && update.PollAnswer.User != nil:
-			tgID = update.PollAnswer.User.ID
 		}
 		if tgID != 0 && tb.users != nil {
 			if err := tb.users.TouchLastSeen(ctx, tgID); err != nil {

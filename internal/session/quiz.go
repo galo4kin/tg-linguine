@@ -268,8 +268,9 @@ func PickQuizDirection(rng *rand.Rand) QuizDirection {
 }
 
 // PickQuizUIMode returns a UI mode with 50/50 probability.
-func PickQuizUIMode(rng *rand.Rand) QuizUIMode {
-	if rng.Intn(2) == 0 {
+// When pollEnabled is false it always returns QuizUIInline.
+func PickQuizUIMode(rng *rand.Rand, pollEnabled bool) QuizUIMode {
+	if !pollEnabled || rng.Intn(2) == 0 {
 		return QuizUIInline
 	}
 	return QuizUIPoll

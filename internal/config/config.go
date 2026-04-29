@@ -46,6 +46,9 @@ type Config struct {
 	// QuizXPBonusGoal is the bonus XP added once per day when the user
 	// reaches QuizDailyGoal correct answers.
 	QuizXPBonusGoal int `env:"QUIZ_XP_BONUS_GOAL" envDefault:"50"`
+	// QuizPollEnabled controls whether quiz cards can use the native
+	// Telegram poll UI. When false all cards use inline buttons only.
+	QuizPollEnabled bool `env:"QUIZ_POLL_ENABLED" envDefault:"true"`
 }
 
 func Load() (*Config, error) {
