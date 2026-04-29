@@ -384,7 +384,8 @@ func (h *Study) handleNext(ctx context.Context, b *bot.Bot, userID int64, loc *g
 			final, _ := h.fsm.End(userID)
 			roundXP := h.takeRoundXP(userID)
 			prog := h.fetchProgress(ctx, userID)
-			h.sendAndTrack(ctx, b, userID, chatIDInt64(chatID), renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP), quizSummaryKeyboard(loc))
+			vs := h.fetchVocabStats(ctx, userID)
+			h.sendAndTrack(ctx, b, userID, chatIDInt64(chatID), renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP, vs), quizSummaryKeyboard(loc, vs.Learning))
 			return
 		}
 		h.sendCurrentCard(ctx, b, userID, loc, chatIDInt64(chatID))
@@ -463,10 +464,11 @@ func (h *Study) renderState(ctx context.Context, b *bot.Bot, userID int64, loc *
 	}
 	if snap.Done() {
 		final, _ := h.fsm.End(userID)
-	
+
 		roundXP := h.takeRoundXP(userID)
 		prog := h.fetchProgress(ctx, userID)
-		h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP), quizSummaryKeyboard(loc))
+		vs := h.fetchVocabStats(ctx, userID)
+		h.editTo(ctx, b, chatID, msgID, renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP, vs), quizSummaryKeyboard(loc, vs.Learning))
 		return
 	}
 	// If the next card is a native poll, we cannot render it by editing
@@ -493,13 +495,47 @@ func (h *Study) endAndSummarize(ctx context.Context, b *bot.Bot, userID int64, l
 
 	roundXP := h.takeRoundXP(userID)
 	prog := h.fetchProgress(ctx, userID)
-	summary := renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP)
+	vs := h.fetchVocabStats(ctx, userID)
+	summary := renderQuizSummary(loc, final, prog, h.scoring.DailyGoal, roundXP, vs)
 	if isPoll {
 		b.DeleteMessage(ctx, &bot.DeleteMessageParams{ChatID: chatID, MessageID: msgID})
-		h.sendAndTrack(ctx, b, userID, chatIDInt64(chatID), summary, quizSummaryKeyboard(loc))
+		h.sendAndTrack(ctx, b, userID, chatIDInt64(chatID), summary, quizSummaryKeyboard(loc, vs.Learning))
 		return
 	}
-	h.editTo(ctx, b, chatID, msgID, summary, quizSummaryKeyboard(loc))
+	h.editTo(ctx, b, chatID, msgID, summary, quizSummaryKeyboard(loc, vs.Learning))
+}
+
+type vocabStats struct {
+	Total    int
+	Mastered int
+	Learning int
+}
+
+func (h *Study) fetchVocabStats(ctx context.Context, userID int64) vocabStats {
+	active, err := h.languages.Active(ctx, userID)
+	if err != nil || active == nil {
+		return vocabStats{}
+	}
+	lang := active.LanguageCode
+	total, err := h.statuses.CountUserWords(ctx, h.db, userID, lang, []dictionary.WordStatus{
+		dictionary.StatusLearning, dictionary.StatusKnown, dictionary.StatusMastered,
+	})
+	if err != nil {
+		h.log.Error("quiz: count total words", "err", err)
+	}
+	mastered, err := h.statuses.CountUserWords(ctx, h.db, userID, lang, []dictionary.WordStatus{
+		dictionary.StatusMastered,
+	})
+	if err != nil {
+		h.log.Error("quiz: count mastered words", "err", err)
+	}
+	learning, err := h.statuses.CountUserWords(ctx, h.db, userID, lang, []dictionary.WordStatus{
+		dictionary.StatusLearning,
+	})
+	if err != nil {
+		h.log.Error("quiz: count learning words", "err", err)
+	}
+	return vocabStats{Total: total, Mastered: mastered, Learning: learning}
 }
 
 func (h *Study) fetchProgress(ctx context.Context, userID int64) *progress.UserProgress {
@@ -737,14 +773,14 @@ func renderQuizFeedback(loc *goi18n.Localizer, snap session.QuizSnapshot, card s
 	return strings.TrimRight(sb.String(), "\n")
 }
 
-func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot, prog *progress.UserProgress, dailyGoal, roundXP int) string {
+func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot, prog *progress.UserProgress, dailyGoal, roundXP int, vs vocabStats) string {
 	var sb strings.Builder
 	sb.WriteString(tgi18n.T(loc, "quiz.summary.header", map[string]int{
 		"Correct": snap.Correct,
 		"Wrong":   snap.Wrong,
 		"Total":   len(snap.Deck),
 	}))
-	sb.WriteString("\n")
+	sb.WriteString("\n\n")
 	if prog != nil {
 		sb.WriteString(tgi18n.T(loc, "quiz.summary.xp", map[string]any{"XP": roundXP}))
 		sb.WriteString("\n")
@@ -759,17 +795,24 @@ func renderQuizSummary(loc *goi18n.Localizer, snap session.QuizSnapshot, prog *p
 	if len(snap.Mastered) == 0 {
 		sb.WriteString("\n")
 		sb.WriteString(tgi18n.T(loc, "quiz.summary.no_mastered", nil))
-		return sb.String()
+	} else {
+		sb.WriteString("\n")
+		sb.WriteString(tgi18n.T(loc, "quiz.summary.mastered_header", map[string]int{
+			"Count": len(snap.Mastered),
+		}))
+		sb.WriteString("\n")
+		for _, lemma := range snap.Mastered {
+			fmt.Fprintf(&sb, "• %s\n", lemma)
+		}
 	}
-	sb.WriteString("\n")
-	sb.WriteString(tgi18n.T(loc, "quiz.summary.mastered_header", map[string]int{
-		"Count": len(snap.Mastered),
+	sb.WriteString("\n\n")
+	sb.WriteString(tgi18n.T(loc, "quiz.summary.vocab_stats", map[string]any{
+		"Total":    vs.Total,
+		"Mastered": vs.Mastered,
 	}))
 	sb.WriteString("\n")
-	for _, lemma := range snap.Mastered {
-		fmt.Fprintf(&sb, "• %s\n", lemma)
-	}
-	return strings.TrimRight(sb.String(), "\n")
+	sb.WriteString(tgi18n.T(loc, "quiz.summary.add_words_hint", nil))
+	return sb.String()
 }
 
 func filterSingleWord(items []string) []string {
@@ -874,11 +917,19 @@ func quizFeedbackKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
 	}}
 }
 
-func quizSummaryKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
-	return &models.InlineKeyboardMarkup{InlineKeyboard: [][]models.InlineKeyboardButton{
-		{{Text: tgi18n.T(loc, "quiz.btn.again", nil), CallbackData: CallbackPrefixStudy + "again"}},
-		{{Text: tgi18n.T(loc, "quiz.btn.close", nil), CallbackData: CallbackPrefixStudy + "close"}},
-	}}
+func quizSummaryKeyboard(loc *goi18n.Localizer, remainingLearning int) *models.InlineKeyboardMarkup {
+	rows := make([][]models.InlineKeyboardButton, 0, 2)
+	if remainingLearning > 0 {
+		n := min(remainingLearning, 10)
+		text := tgi18n.T(loc, "quiz.btn.again_n", map[string]any{"N": n})
+		rows = append(rows, []models.InlineKeyboardButton{
+			{Text: text, CallbackData: CallbackPrefixStudy + "again"},
+		})
+	}
+	rows = append(rows, []models.InlineKeyboardButton{
+		{Text: tgi18n.T(loc, "quiz.btn.close", nil), CallbackData: CallbackPrefixStudy + "close"},
+	})
+	return &models.InlineKeyboardMarkup{InlineKeyboard: rows}
 }
 
 func quizCloseKeyboard(loc *goi18n.Localizer) *models.InlineKeyboardMarkup {
