@@ -114,7 +114,7 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 	}, deps.DB, deps.Bundle, log)
 	meH := handlers.NewMe(deps.Users, deps.Languages, deps.Progress, cfg.QuizDailyGoal, deps.DB, deps.Bundle, log)
 	deleteH := handlers.NewDelete(deps.Users, onbFSM, quizFSM, keyWaiter, deps.Bundle, log)
-	settingsH := handlers.NewSettings(deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
+	settingsH := handlers.NewSettings(screenMgr, deps.Users, deps.Languages, keyWaiter, deleteH, deps.Bundle, log)
 	adminGate := func(uid int64) bool { return IsAdmin(cfg, uid) }
 	adminH := handlers.NewAdmin(adminGate, deps.Users, deps.ArticleRepo, deps.Dictionary, deps.DB, log)
 
@@ -152,6 +152,13 @@ func New(cfg *config.Config, log *slog.Logger, deps Deps) (*Bot, error) {
 
 	nav.Register(screen.ScreenWelcome, func(ctx context.Context, b *bot.Bot, chatID int64, _ map[string]string) {
 		welcomeH.Show(ctx, b, chatID)
+	})
+	nav.Register(screen.ScreenSettings, func(ctx context.Context, b *bot.Bot, chatID int64, _ map[string]string) {
+		u, err := deps.Users.ByTelegramID(ctx, chatID)
+		if err != nil {
+			return
+		}
+		settingsH.ShowMenu(ctx, b, chatID, u)
 	})
 
 	fallback := handlers.NewFallback(screenMgr, nav, keyWaiter, log)

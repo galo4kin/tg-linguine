@@ -11,6 +11,7 @@ import (
 	"github.com/go-telegram/bot/models"
 	goi18n "github.com/nicksnyder/go-i18n/v2/i18n"
 	tgi18n "github.com/nikita/tg-linguine/internal/i18n"
+	"github.com/nikita/tg-linguine/internal/screen"
 	"github.com/nikita/tg-linguine/internal/session"
 	"github.com/nikita/tg-linguine/internal/users"
 )
@@ -36,6 +37,7 @@ const CallbackPrefixSettings = "set:"
 // inline menu and routes each leaf action to the relevant repository or to
 // the existing API-key waiter for the `/setkey` reuse case.
 type Settings struct {
+	mgr       *screen.Manager
 	users     *users.Service
 	languages users.UserLanguageRepository
 	keyWaiter *session.APIKeyWaiter
@@ -45,6 +47,7 @@ type Settings struct {
 }
 
 func NewSettings(
+	mgr *screen.Manager,
 	svc *users.Service,
 	langs users.UserLanguageRepository,
 	keyWaiter *session.APIKeyWaiter,
@@ -53,6 +56,7 @@ func NewSettings(
 	log *slog.Logger,
 ) *Settings {
 	return &Settings{
+		mgr:       mgr,
 		users:     svc,
 		languages: langs,
 		keyWaiter: keyWaiter,
@@ -60,6 +64,18 @@ func NewSettings(
 		bundle:    bundle,
 		log:       log,
 	}
+}
+
+// ShowMenu renders the settings top menu via Manager for a known user.
+func (h *Settings) ShowMenu(ctx context.Context, b *bot.Bot, chatID int64, u *users.User) {
+	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
+	body := settingsTopKeyboard(loc)
+	kb := screen.WithNavigation(loc, body, "", nil)
+	_ = h.mgr.Show(ctx, b, chatID, screen.Screen{
+		ID:       screen.ScreenSettings,
+		Text:     tgi18n.T(loc, "settings.title", nil),
+		Keyboard: kb,
+	})
 }
 
 // HandleCommand reacts to `/settings` — opens a fresh top menu.
@@ -72,12 +88,7 @@ func (h *Settings) HandleCommand(ctx context.Context, b *bot.Bot, update *models
 	if !ok {
 		return
 	}
-	loc := tgi18n.For(h.bundle, u.InterfaceLanguage)
-	b.SendMessage(ctx, &bot.SendMessageParams{
-		ChatID:      msg.Chat.ID,
-		Text:        tgi18n.T(loc, "settings.title", nil),
-		ReplyMarkup: settingsTopKeyboard(loc),
-	})
+	h.ShowMenu(ctx, b, msg.Chat.ID, u)
 }
 
 // HandleCallback drives the `set:` prefix.
